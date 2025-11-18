@@ -1,16 +1,107 @@
-# React + Vite
+<<<<<<< HEAD
+FocusHub — Virtual Study Room Platform
+1. Introduction
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+FocusHub is a web-based virtual study platform designed to enhance students' productivity through collaborative online study rooms. The system allows users to join live study sessions, create their own study rooms, communicate via real-time chat, and access supportive study tools. The platform is intended to simulate a focused study environment and help learners stay accountable.
 
-Currently, two official plugins are available:
+This project was developed as part of an academic assignment, implementing modern web technologies, cloud services, and user-centered UI/UX design principles.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+2. Objectives
 
-## React Compiler
+The primary objectives of FocusHub are:
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+To provide students with a virtual environment for focused study.
 
-## Expanding the ESLint configuration
+To enable real-time collaboration through livestream previews and chat.
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+To allow users to create, join, and browse study rooms.
+
+To offer guest access for first-time users.
+
+To integrate authentication (Email/Password + Google Sign-In).
+
+To store and manage user profiles and study room data using Firebase Firestore.
+
+3. Features
+Authentication
+
+Email & Password Signup
+
+Google Authentication
+
+Guest Mode (restricted access)
+
+Extended profile fields:
+
+Full Name
+
+Username
+
+Field of Study / Interests
+
+Study Rooms
+
+Browse available study rooms
+
+View livestream thumbnail previews
+
+Join rooms (login required)
+
+Create new rooms (login required)
+
+Real-time chat (RoomMessages)
+
+Dynamic room rendering
+
+UI/UX Features
+
+Modern landing page
+
+Hero section
+
+Features section
+
+User reviews
+
+Contact information
+
+Smooth scrolling and animations
+
+Responsive layout (mobile-friendly)
+
+4. Tools & Technologies Used
+Frontend
+
+React.js
+
+Tailwind CSS
+
+React Icons
+
+Backend / Cloud
+
+Firebase Authentication
+
+Firebase Firestore
+
+Firebase Hosting
+
+Version Control
+
+Git
+
+GitHub
+
+5. System Requirements
+
+Node.js (v18 or above recommended)
+
+npm or yarn
+
+Firebase project configured with:
+
+Authentication
+
+Firestore Database
+
+Web App Credentials
