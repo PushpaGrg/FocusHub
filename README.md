@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 FocusHub — Virtual Study Room Platform
 1. Introduction
 
