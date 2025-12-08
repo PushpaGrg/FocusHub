@@ -1,25 +1,67 @@
 // src/App.jsx
 import { useState, useEffect } from "react";
-import { auth } from "./firebase";
-import { signOut } from "firebase/auth";
+import { auth, db } from "./firebase";
+import { signOut, updateEmail } from "firebase/auth";
+import { doc, getDoc, setDoc, collection, addDoc } from "firebase/firestore";
+
 import Home from "./pages/Home";
 import Login from "./pages/Login";
 import StudyRoomList from "./pages/StudyRoomList";
 import RoomMessages from "./pages/RoomMessages";
+import EditProfile from "./pages/EditProfile";
+import CreateRoom from "./pages/CreateRoom";
 
-function App() {
+export default function App() {
   const [user, setUser] = useState(undefined);
+  const [profile, setProfile] = useState(null); // stores profile data including photoBase64
   const [isGuest, setIsGuest] = useState(false);
   const [showLogin, setShowLogin] = useState(false);
   const [selectedRoom, setSelectedRoom] = useState(null);
+  const [editingProfile, setEditingProfile] = useState(false);
+  const [creatingRoom, setCreatingRoom] = useState(false);
 
+  // Listen for auth changes and fetch profile
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged((u) => {
+    const unsubscribe = auth.onAuthStateChanged(async (u) => {
       setUser(u);
-      if (u) setShowLogin(false); // hide login if already logged in
+      if (u) {
+        const docRef = doc(db, "users", u.uid);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          setProfile(docSnap.data());
+        } else {
+          setProfile({
+            username: u.email.split("@")[0],
+            fullName: "",
+            fieldOfStudy: "",
+            email: u.email,
+            photoBase64: null,
+          });
+        }
+      } else {
+        setProfile(null);
+      }
+      setShowLogin(false);
     });
     return () => unsubscribe();
   }, []);
+
+  // Save profile changes
+  const handleProfileUpdate = async (updatedData) => {
+    try {
+      const docRef = doc(db, "users", user.uid);
+      await setDoc(docRef, updatedData, { merge: true });
+
+      if (updatedData.email && updatedData.email !== user.email) {
+        await updateEmail(user, updatedData.email);
+      }
+
+      setProfile(updatedData);
+      setEditingProfile(false);
+    } catch (err) {
+      alert("Error updating profile: " + err.message);
+    }
+  };
 
   const handleSelectRoom = (room) => {
     if (!user && !isGuest) {
@@ -29,66 +71,69 @@ function App() {
     setSelectedRoom(room);
   };
 
-  // Loading screen
-  if (user === undefined) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <p className="text-gray-500 text-xl">Loading...</p>
-      </div>
-    );
-  }
+  const handleLogout = async () => {
+    await signOut(auth);
+    setUser(null);
+    setProfile(null);
+    setSelectedRoom(null);
+  };
 
-  // Show login page if triggered
-  if (showLogin) {
-    return (
-      <Login
-        onLogin={() => {
-          setShowLogin(false);
-        }}
-      />
-    );
-  }
+  // Create Room
+  const handleCreateRoom = () => {
+    if (!user) {
+      alert("Please login to create a room!");
+      return;
+    }
+    setCreatingRoom(true);
+  };
 
-  // Not logged in & not guest: show homepage
-  if (!user && !isGuest) {
-    return <Home onGuest={() => setIsGuest(true)} onLoginClick={() => setShowLogin(true)} />;
-  }
+  const handleSaveRoom = async (roomData) => {
+  try {
+    const docRef = await addDoc(collection(db, "studyRooms"), {
+      ...roomData,
+      createdBy: user.uid,
+      createdAt: new Date(),
+    });
 
-  // Logged in or guest: show rooms/messages
+    const newRoom = {
+      id: docRef.id,
+      ...roomData,
+      createdBy: user.uid,
+    };
+
+    setCreatingRoom(false);
+
+    // Immediately open the room as host
+    setSelectedRoom(newRoom);
+  } catch (err) {
+    alert("Error creating room: " + err.message);
+  }
+};
+
+
+  // Loading & Conditional Rendering
+  if (user === undefined)
+    return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
+
+  if (showLogin) return <Login onLogin={() => setShowLogin(false)} />;
+  if (!user && !isGuest) return <Home onGuest={() => setIsGuest(true)} onLoginClick={() => setShowLogin(true)} />;
+
+  if (editingProfile)
+    return <EditProfile user={profile} onSave={handleProfileUpdate} onCancel={() => setEditingProfile(false)} />;
+
+  if (creatingRoom)
+    return <CreateRoom onSave={handleSaveRoom} onCancel={() => setCreatingRoom(false)} />;
+
+  if (selectedRoom)
+    return <RoomMessages room={selectedRoom} user={profile} onBack={() => setSelectedRoom(null)} />;
+
   return (
-    <div className="min-h-screen bg-gray-100 p-4">
-      <div className="flex justify-between items-center mb-4 bg-white p-4 rounded shadow">
-        <p className="text-gray-700 font-medium">
-          {user ? `Logged in as: ${user.email}` : "Browsing as Guest"}
-        </p>
-        {user && (
-          <button
-            className="bg-red-600 text-white px-4 py-2 rounded hover:bg-red-700 transition"
-            onClick={() => signOut(auth)}
-          >
-            Logout
-          </button>
-        )}
-      </div>
-
-      {!selectedRoom ? (
-        <StudyRoomList user={user} onSelectRoom={handleSelectRoom} />
-      ) : (
-        <div>
-          <button
-            onClick={() => setSelectedRoom(null)}
-            className="mb-4 text-blue-600 underline"
-          >
-            ← Back to rooms
-          </button>
-          <RoomMessages
-            room={selectedRoom}
-            userEmail={user ? user.email : "Guest"}
-          />
-        </div>
-      )}
-    </div>
+    <StudyRoomList
+      user={profile}
+      onSelectRoom={handleSelectRoom}
+      onLogout={handleLogout}
+      onEditProfile={() => setEditingProfile(true)}
+      onCreateRoom={handleCreateRoom}
+    />
   );
 }
-
-export default App;
