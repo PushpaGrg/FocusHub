@@ -10,6 +10,7 @@ import StudyRoomList from "./pages/StudyRoomList";
 import RoomMessages from "./pages/RoomMessages";
 import EditProfile from "./pages/EditProfile";
 import CreateRoom from "./pages/CreateRoom";
+import StudyBuddyRoom from "./pages/StudyBuddyRoom";
 
 export default function App() {
   const [user, setUser] = useState(undefined);
@@ -19,6 +20,8 @@ export default function App() {
   const [selectedRoom, setSelectedRoom] = useState(null);
   const [editingProfile, setEditingProfile] = useState(false);
   const [creatingRoom, setCreatingRoom] = useState(false);
+  const [studyBuddyRoom, setStudyBuddyRoom] = useState(null);
+
 
   // Listen for auth changes and fetch profile
   useEffect(() => {
@@ -127,6 +130,14 @@ export default function App() {
   if (selectedRoom)
     return <RoomMessages room={selectedRoom} user={profile} onBack={() => setSelectedRoom(null)} />;
 
+  if (studyBuddyRoom)
+  return (
+    <StudyBuddyRoom
+      room={studyBuddyRoom}
+      onBack={() => setStudyBuddyRoom(null)}
+    />
+  );
+
   return (
     <StudyRoomList
       user={profile}
@@ -134,6 +145,7 @@ export default function App() {
       onLogout={handleLogout}
       onEditProfile={() => setEditingProfile(true)}
       onCreateRoom={handleCreateRoom}
+      onCreateStudyBuddyRoom={(room) => setStudyBuddyRoom(room)}
     />
   );
 }

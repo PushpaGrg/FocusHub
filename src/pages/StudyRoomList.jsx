@@ -6,7 +6,7 @@ import CreateRoom from "./CreateRoom";
 import { addDoc, collection, getDocs, serverTimestamp } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
-export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProfile, onCreateRoom }) {
+export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProfile, onCreateRoom, onCreateStudyBuddyRoom }) {
   const [rooms, setRooms] = useState([]);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [showMyRooms, setShowMyRooms] = useState(false);
@@ -50,6 +50,18 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
               className="flex items-center gap-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white px-4 py-2 rounded-lg hover:from-blue-600 hover:to-purple-700 transition transform hover:scale-105 shadow-md font-medium"
             >
               <FaPlus /> Create Room
+            </button>
+            <button
+              onClick={()=>
+                onCreateStudyBuddyRoom({
+                  name: "Study Buddy Room",
+                  isPrivate: true,
+                  createdAt: new Date(),
+                })
+              }
+              className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition transform hover:scale-105 shadow-md font-medium"
+            >
+              🤝 Study Buddy
             </button>
 
             {/* My Rooms Toggle */}
