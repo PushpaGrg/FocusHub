@@ -1,12 +1,12 @@
 // src/pages/StudyRoomList.jsx
 import { useEffect, useState } from "react";
 import { db } from "../firebase";
-import { FaPlus, FaLayerGroup, FaSignOutAlt, FaUser } from "react-icons/fa";
+import { FaPlus, FaLayerGroup, FaSignOutAlt, FaUser, FaVideo } from "react-icons/fa";
 import CreateRoom from "./CreateRoom";
 import { addDoc, collection, getDocs, serverTimestamp } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
-export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProfile, onCreateRoom, onCreateStudyBuddyRoom }) {
+export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProfile, onCreateRoom, onOpenStudyBuddyRoom }) {
   const [rooms, setRooms] = useState([]);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [showMyRooms, setShowMyRooms] = useState(false);
@@ -34,6 +34,13 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
     return room.createdBy === currentUserId;
   });
 
+  // Get user's created rooms
+  const userCreatedRooms = rooms.filter(room => room.createdBy === currentUserId);
+
+  const handleStudyBuddyClick = () => {
+    onOpenStudyBuddyRoom(); // This will trigger the create form
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50">
       {/* Top Navbar */}
@@ -44,24 +51,22 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
           </div>
 
           <div className="flex items-center gap-4">
+            {/* Study Buddy Room Button */}
+            {userCreatedRooms.length > 0 && (
+              <button
+                onClick={handleStudyBuddyClick}
+                className="flex items-center gap-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white px-4 py-2 rounded-lg hover:from-blue-600 hover:to-purple-700 transition transform hover:scale-105 shadow-md font-medium"
+              >
+                <FaVideo /> Study Buddy
+              </button>
+            )}
+
             {/* Create Room Button */}
             <button
               onClick={() => setShowCreateRoom(true)}
               className="flex items-center gap-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white px-4 py-2 rounded-lg hover:from-blue-600 hover:to-purple-700 transition transform hover:scale-105 shadow-md font-medium"
             >
               <FaPlus /> Create Room
-            </button>
-            <button
-              onClick={()=>
-                onCreateStudyBuddyRoom({
-                  name: "Study Buddy Room",
-                  isPrivate: true,
-                  createdAt: new Date(),
-                })
-              }
-              className="flex items-center gap-2 bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition transform hover:scale-105 shadow-md font-medium"
-            >
-              🤝 Study Buddy
             </button>
 
             {/* My Rooms Toggle */}
@@ -199,10 +204,15 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                     
                     {/* Host Badge (if user created this room) */}
                     {room.createdBy === currentUserId && (
-                      <div className="mb-3">
+                      <div className="mb-3 flex items-center gap-2">
                         <span className="inline-block bg-gradient-to-r from-purple-100 to-pink-100 text-purple-700 px-3 py-1 rounded-full text-xs font-semibold">
                           👑 Your Room
                         </span>
+                        {room.isPrivate && (
+                          <span className="inline-block bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs font-semibold">
+                            🔒 Private
+                          </span>
+                        )}
                       </div>
                     )}
 
@@ -245,6 +255,7 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                   ...roomData,
                   createdBy: firebaseUser.uid,
                   createdAt: serverTimestamp(),
+                  participants: [], // Add this line
                 };
 
                 const docRef = await addDoc(collection(db, "studyRooms"), newRoom);
