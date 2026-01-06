@@ -1,4 +1,3 @@
-// src/pages/Login.jsx
 import { useState } from "react";
 import { auth, provider, db } from "../firebase";
 import {
@@ -10,9 +9,9 @@ import {
   signOut,
 } from "firebase/auth";
 import { doc, setDoc } from "firebase/firestore";
-import { FaGoogle, FaUser, FaEnvelope, FaLock, FaGraduationCap, FaUserCircle } from "react-icons/fa";
+import { FaGoogle, FaUser, FaEnvelope, FaLock, FaGraduationCap, FaUserCircle, FaArrowLeft } from "react-icons/fa";
 
-export default function Login({ onLogin }) {
+export default function Login({ onLogin, onBack }) {
   const [isSignup, setIsSignup] = useState(false);
   const [fullName, setFullName] = useState("");
   const [username, setUsername] = useState("");
@@ -29,11 +28,9 @@ export default function Login({ onLogin }) {
 
     try {
       if (isSignup) {
-        // Create user
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
         const user = userCredential.user;
 
-        // Save extra info
         await setDoc(doc(db, "users", user.uid), {
           fullName,
           username,
@@ -42,14 +39,10 @@ export default function Login({ onLogin }) {
           createdAt: new Date(),
         });
 
-        // Send verification email
         await sendEmailVerification(user);
-
-        // Show message and sign out immediately to prevent auto-login
         setMessage("✅ Verification email sent! Please check your inbox before logging in.");
         await signOut(auth);
       } else {
-        // Login
         const userCredential = await signInWithEmailAndPassword(auth, email, password);
         const user = userCredential.user;
 
@@ -58,8 +51,6 @@ export default function Login({ onLogin }) {
           await signOut(auth);
           return;
         }
-
-        // Successful login
         onLogin(user);
       }
     } catch (err) {
@@ -85,13 +76,6 @@ export default function Login({ onLogin }) {
     try {
       const result = await signInWithPopup(auth, provider);
       const user = result.user;
-
-      if (!user.emailVerified) {
-        await signOut(auth);
-        setMessage("❗ Google account detected but email not verified. Please verify first.");
-        return;
-      }
-
       onLogin(user);
     } catch (err) {
       setError(err.message);
@@ -99,162 +83,157 @@ export default function Login({ onLogin }) {
   };
 
   return (
-    <div className="w-full max-w-md relative overflow-hidden">
-      {/* Animated Background */}
-      <div className="absolute inset-0 bg-gradient-to-br from-blue-500 via-purple-600 to-pink-500 opacity-10 rounded-3xl"></div>
-      <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-purple-400/20 to-pink-400/20 rounded-full blur-2xl animate-pulse-slow"></div>
-      <div className="absolute bottom-0 left-0 w-40 h-40 bg-gradient-to-br from-blue-400/20 to-cyan-400/20 rounded-full blur-2xl animate-pulse-slow"></div>
+    <div className="min-h-screen w-full flex items-center justify-center relative overflow-hidden bg-gray-50">
+      {/* 1. Background elements consistent with Home */}
+      <div className="absolute inset-0 bg-gradient-to-br from-blue-600 via-purple-600 to-pink-500">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-white/10 rounded-full blur-3xl animate-float"></div>
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-400/20 rounded-full blur-3xl animate-float-slow"></div>
+        <div className="absolute inset-0 bg-grid-pattern opacity-10"></div>
+      </div>
 
-      {/* Content */}
-      <div className="relative bg-white/95 backdrop-blur-sm p-8 rounded-3xl shadow-2xl border border-gray-100">
-        {/* Header with Icon */}
-        <div className="text-center mb-6">
-          <div className="inline-block p-4 bg-gradient-to-br from-blue-500 to-purple-600 rounded-2xl mb-4 shadow-lg">
-            <FaUserCircle className="text-white text-4xl" />
-          </div>
-          <h2 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-            {isSignup ? "Create Account" : "Welcome Back"}
-          </h2>
-          <p className="text-gray-600 mt-2">
-            {isSignup ? "Join the FocusHub community" : "Sign in to continue your journey"}
-          </p>
-        </div>
+      {/* 2. Navigation */}
+      <button 
+        onClick={onBack}
+        className="absolute top-8 left-8 z-20 flex items-center gap-2 text-white/80 hover:text-white transition-all bg-white/10 backdrop-blur-md px-4 py-2 rounded-lg border border-white/20"
+      >
+        <FaArrowLeft /> Back to Home
+      </button>
 
-        {/* Error/Success Messages */}
-        {error && (
-          <div className="mb-4 p-3 bg-red-50 border-l-4 border-red-500 rounded-r-lg">
-            <p className="text-red-700 text-sm">{error}</p>
-          </div>
-        )}
-        {message && (
-          <div className="mb-4 p-3 bg-blue-50 border-l-4 border-blue-500 rounded-r-lg">
-            <p className="text-blue-700 text-sm">{message}</p>
-          </div>
-        )}
-
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {isSignup && (
-            <>
-              <div className="relative">
-                <FaUser className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                <input
-                  value={fullName}
-                  onChange={e => setFullName(e.target.value)}
-                  placeholder="Full Name"
-                  className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none transition"
-                  required
-                />
-              </div>
-              <div className="relative">
-                <FaUserCircle className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                <input
-                  value={username}
-                  onChange={e => setUsername(e.target.value)}
-                  placeholder="Username"
-                  className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none transition"
-                  required
-                />
-              </div>
-              <div className="relative">
-                <FaGraduationCap className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-                <input
-                  value={fieldOfStudy}
-                  onChange={e => setFieldOfStudy(e.target.value)}
-                  placeholder="Field of Study"
-                  className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none transition"
-                  required
-                />
-              </div>
-            </>
-          )}
+      {/* 3. Main Login Card */}
+      <div className="relative z-10 w-full max-w-xl px-4 py-12">
+        <div className="bg-white/95 backdrop-blur-xl rounded-[2.5rem] shadow-2xl border border-white/20 overflow-hidden flex flex-col md:flex-row">
           
-          <div className="relative">
-            <FaEnvelope className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-            <input
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="Email Address"
-              className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none transition"
-              required
-            />
-          </div>
-          
-          <div className="relative">
-            <FaLock className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-            <input
-              type="password"
-              value={password}
-              onChange={e => setPassword(e.target.value)}
-              placeholder="Password"
-              className="w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none transition"
-              required
-            />
-          </div>
-
-          {!isSignup && (
-            <div className="text-right">
-              <button
-                type="button"
-                onClick={handlePasswordReset}
-                className="text-sm text-blue-600 hover:text-purple-600 font-medium transition"
-              >
-                Forgot Password?
-              </button>
+          {/* Left Side Decor (Visible on larger screens) */}
+          <div className="hidden lg:flex w-1/3 bg-gradient-to-b from-blue-500 to-purple-600 p-8 flex-col justify-between text-white">
+            <div>
+              <h3 className="text-2xl font-bold">FocusHub</h3>
+              <p className="text-sm opacity-80 mt-2">Your journey to productivity starts here.</p>
             </div>
-          )}
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 text-sm bg-white/10 p-3 rounded-xl">
+                <FaGraduationCap /> Study with Peers
+              </div>
+              <div className="flex items-center gap-3 text-sm bg-white/10 p-3 rounded-xl">
+                <FaLock /> Secure Access
+              </div>
+            </div>
+          </div>
 
-          <button
-            type="submit"
-            className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-3 rounded-xl font-semibold hover:from-blue-700 hover:to-purple-700 transform hover:scale-105 transition shadow-lg hover:shadow-xl"
-          >
-            {isSignup ? "Create Account" : "Sign In"}
-          </button>
-        </form>
+          {/* Right Side Form */}
+          <div className="flex-1 p-8 md:p-12">
+            <div className="text-center mb-8">
+              <h2 className="text-3xl font-extrabold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                {isSignup ? "Create Account" : "Welcome Back"}
+              </h2>
+              <p className="text-gray-500 text-sm mt-2">
+                {isSignup ? "Sign up to start your study sessions" : "Sign in to access your dashboard"}
+              </p>
+            </div>
 
-        {/* Divider */}
-        <div className="flex items-center my-6">
-          <div className="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
-          <span className="px-4 text-gray-500 text-sm font-medium">OR</span>
-          <div className="flex-1 h-px bg-gradient-to-r from-transparent via-gray-300 to-transparent"></div>
-        </div>
+            {/* Error/Success Alerts */}
+            {error && (
+              <div className="mb-6 p-3 bg-red-50 border-l-4 border-red-500 rounded text-red-700 text-xs animate-shake">
+                {error}
+              </div>
+            )}
+            {message && (
+              <div className="mb-6 p-3 bg-blue-50 border-l-4 border-blue-500 rounded text-blue-700 text-xs">
+                {message}
+              </div>
+            )}
 
-        {/* Google Login */}
-        <button
-          onClick={handleGoogleLogin}
-          className="w-full flex items-center justify-center gap-3 bg-white border-2 border-gray-200 text-gray-700 py-3 rounded-xl font-semibold hover:bg-gray-50 hover:border-gray-300 transform hover:scale-105 transition shadow-md hover:shadow-lg"
-        >
-          <FaGoogle className="text-red-500 text-xl" />
-          Continue with Google
-        </button>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              {isSignup && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <InputWithIcon icon={<FaUser />} placeholder="Full Name" value={fullName} onChange={setFullName} />
+                  <InputWithIcon icon={<FaUserCircle />} placeholder="Username" value={username} onChange={setUsername} />
+                  <div className="md:col-span-2">
+                    <InputWithIcon icon={<FaGraduationCap />} placeholder="Field of Study" value={fieldOfStudy} onChange={setFieldOfStudy} />
+                  </div>
+                </div>
+              )}
+              
+              <InputWithIcon icon={<FaEnvelope />} placeholder="Email" type="email" value={email} onChange={setEmail} />
+              <InputWithIcon icon={<FaLock />} placeholder="Password" type="password" value={password} onChange={setPassword} />
 
-        {/* Toggle Login/Signup */}
-        <div className="text-center mt-6">
-          <p className="text-gray-600">
-            {isSignup ? "Already have an account?" : "Don't have an account?"}{" "}
+              {!isSignup && (
+                <div className="text-right">
+                  <button type="button" onClick={handlePasswordReset} className="text-xs text-blue-600 hover:underline">
+                    Forgot Password?
+                  </button>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-3.5 rounded-xl font-bold shadow-lg hover:shadow-blue-500/25 transition-all transform hover:-translate-y-1"
+              >
+                {isSignup ? "Get Started" : "Sign In"}
+              </button>
+            </form>
+
+            <div className="relative my-8">
+              <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-gray-200"></span></div>
+              <div className="relative flex justify-center text-xs uppercase"><span className="bg-white px-2 text-gray-400">Or continue with</span></div>
+            </div>
+
             <button
-              onClick={() => setIsSignup(!isSignup)}
-              className="text-blue-600 hover:text-purple-600 font-semibold underline transition"
+              onClick={handleGoogleLogin}
+              className="w-full flex items-center justify-center gap-3 bg-white border border-gray-200 py-3 rounded-xl font-semibold hover:bg-gray-50 transition-all shadow-sm"
             >
-              {isSignup ? "Sign In" : "Sign Up"}
+              <FaGoogle className="text-red-500" /> Google
             </button>
-          </p>
+
+            <p className="text-center mt-8 text-sm text-gray-500">
+              {isSignup ? "Already have an account?" : "New to FocusHub?"}{" "}
+              <button
+                onClick={() => { setIsSignup(!isSignup); setError(""); setMessage(""); }}
+                className="text-blue-600 font-bold hover:underline"
+              >
+                {isSignup ? "Sign In" : "Create one now"}
+              </button>
+            </p>
+          </div>
         </div>
       </div>
 
       <style>
         {`
-          .animate-pulse-slow {
-            animation: pulseSlow 3s ease-in-out infinite;
+          .bg-grid-pattern {
+            background-image: linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
+            background-size: 50px 50px;
           }
-
-          @keyframes pulseSlow {
-            0%, 100% { opacity: 0.3; transform: scale(1); }
-            50% { opacity: 0.6; transform: scale(1.1); }
+          .animate-float { animation: float 10s ease-in-out infinite; }
+          .animate-float-slow { animation: float 15s ease-in-out infinite; }
+          @keyframes float {
+            0%, 100% { transform: translate(0, 0); }
+            50% { transform: translate(20px, -40px); }
           }
+          @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+          }
+          .animate-shake { animation: shake 0.2s ease-in-out 0s 2; }
         `}
       </style>
+    </div>
+  );
+}
+
+// Reusable Input Component
+function InputWithIcon({ icon, placeholder, value, onChange, type = "text" }) {
+  return (
+    <div className="relative">
+      <div className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">{icon}</div>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className="w-full pl-11 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-none transition-all text-sm"
+        required
+      />
     </div>
   );
 }

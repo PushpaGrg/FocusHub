@@ -1,280 +1,317 @@
-// src/pages/StudyBuddyRoom.jsx
-import { useState, useEffect } from "react";
-import { FaArrowLeft, FaLock, FaCopy } from "react-icons/fa";
+import { useState, useEffect, useRef } from "react";
+import { FaMicrophone, FaMicrophoneSlash, FaVideo, FaVideoSlash, FaCommentDots, FaCopy, FaCheck, FaSignOutAlt } from "react-icons/fa";
 import { db } from "../firebase";
-import { doc, onSnapshot, updateDoc, arrayUnion, arrayRemove } from "firebase/firestore";
+import { doc, onSnapshot, updateDoc, arrayUnion, arrayRemove, collection, addDoc, query, orderBy, deleteDoc, writeBatch, getDocs, setDoc, getDoc } from "firebase/firestore";
+import Peer from "peerjs";
 
 export default function StudyBuddyRoom({ room, user, onBack }) {
-  const [copied, setCopied] = useState(false);
   const [buddies, setBuddies] = useState([]);
-  const [isHost, setIsHost] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [copied, setCopied] = useState(false);
+  const [sessionStarted, setSessionStarted] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const [micOn, setMicOn] = useState(true);
+  const [videoOn, setVideoOn] = useState(true);
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState("");
+  const [remoteStreams, setRemoteStreams] = useState({});
+  const [peerReady, setPeerReady] = useState(false);
 
-  // Check if current user is host
+  const myVideoRef = useRef();
+  const peersRef = useRef({}); 
+  const peerRef = useRef();
+  const localStreamRef = useRef();
+
+  const isHost = user.uid === room.createdBy;
+  const roomRef = doc(db, "studyRooms", room.id);
+  const inviteLink = `${window.location.origin}/join/${room.id}`;
+
   useEffect(() => {
-    if (user && room) {
-      const userUid = user.uid;
-      const roomCreatorUid = room.createdBy;
-      const isHostUser = userUid === roomCreatorUid;
-      
-      setIsHost(isHostUser);
-      console.log("=== HOST CHECK DEBUG ===");
-      console.log("Room Creator:", roomCreatorUid);
-      console.log("Current User UID:", userUid);
-      console.log("Is Host?:", isHostUser);
-      console.log("User Profile:", user);
-      console.log("Room Data:", room);
-    }
-  }, [user, room]);
-
-  // Real-time buddy list listener
-  useEffect(() => {
-    if (!room || !room.id) return;
-
-    const roomRef = doc(db, "studyRooms", room.id);
-    
     const unsubscribe = onSnapshot(roomRef, (docSnap) => {
       if (docSnap.exists()) {
         const roomData = docSnap.data();
-        const roomBuddies = roomData.participants || [];
-        setBuddies(roomBuddies);
+        setBuddies(roomData.participants || []);
+        setSessionStarted(roomData.sessionStarted || false);
       }
-      setLoading(false);
     });
+    return unsubscribe;
+  }, [room.id]);
 
-    return () => unsubscribe();
-  }, [room?.id]);
-
-  // Add current user to participants when entering room
   useEffect(() => {
-    if (!room || !room.id || !user || !user.uid) return;
-
-    const addUserToRoom = async () => {
-      const roomRef = doc(db, "studyRooms", room.id);
-      
-      // Make sure all fields are defined
-      const userData = {
-        uid: user.uid,
-        username: user.username || user.email?.split("@")[0] || "User",
-        email: user.email || "unknown@email.com",
-        photoBase64: user.photoBase64 || "",
-        joinedAt: new Date(),
+    const userData = {
+      uid: user.uid,
+      username: user.username || user.email.split("@")[0],
+      email: user.email,
+      joinedAt: new Date(),
+    };
+    const join = async () => { await updateDoc(roomRef, { participants: arrayUnion(userData) }); };
+    join();
+    return () => {
+      const leave = async () => {
+        try {
+          const snap = await getDoc(roomRef);
+          if (snap.exists()) await updateDoc(roomRef, { participants: arrayRemove(userData) });
+          await deleteDoc(doc(roomRef, "peers", user.uid)).catch(() => {});
+        } catch (err) {}
       };
+      leave();
+    };
+  }, [room.id, user.uid]);
 
+  useEffect(() => {
+    if (!sessionStarted) return;
+    const q = query(collection(roomRef, "messages"), orderBy("timestamp", "asc"));
+    return onSnapshot(q, (snapshot) => {
+      setMessages(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+  }, [room.id, sessionStarted]);
+
+  // PeerJS & Media Initialization
+  useEffect(() => {
+    if (!sessionStarted) return;
+
+    const initMedia = async () => {
       try {
-        // Check if user already in participants
-        const exists = buddies.some(b => b.uid === user.uid);
-        if (!exists && userData.uid) {
-          await updateDoc(roomRef, {
-            participants: arrayUnion(userData),
-          });
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localStreamRef.current = stream;
+        if (myVideoRef.current) {
+          myVideoRef.current.srcObject = stream;
         }
+
+        const peer = new Peer(user.uid, {
+          host: "0.peerjs.com",
+          port: 443,
+          secure: true,
+          config: { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] }
+        });
+
+        peerRef.current = peer;
+
+        peer.on("open", async (id) => {
+          setPeerReady(true);
+          await setDoc(doc(roomRef, "peers", user.uid), {
+            peerId: id, 
+            userId: user.uid,
+            timestamp: Date.now() 
+          });
+        });
+
+        peer.on("call", (call) => {
+          call.answer(localStreamRef.current);
+          call.on("stream", (remoteStream) => {
+            // Trigger state update with a fresh object reference
+            setRemoteStreams(prev => ({ ...prev, [call.peer]: remoteStream }));
+          });
+        });
+
       } catch (err) {
-        console.error("Error adding user to room:", err);
+        alert("Camera/Mic access denied.");
       }
     };
 
-    addUserToRoom();
+    initMedia();
 
-    // Cleanup: remove user when leaving
     return () => {
-      const removeUserFromRoom = async () => {
-        try {
-          const roomRef = doc(db, "studyRooms", room.id);
-          const userData = {
-            uid: user.uid,
-            username: user.username || user.email?.split("@")[0] || "User",
-            email: user.email || "unknown@email.com",
-            photoBase64: user.photoBase64 || "",
-            joinedAt: new Date(),
-          };
-          await updateDoc(roomRef, {
-            participants: arrayRemove(userData),
-          });
-        } catch (err) {
-          console.error("Error removing user from room:", err);
-        }
-      };
-
-      removeUserFromRoom();
+      if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop());
+      if (peerRef.current) peerRef.current.destroy();
     };
-  }, [room?.id, user, buddies]);
+  }, [sessionStarted]);
 
-  // Generate invite link based on room ID
-  const inviteLink = `${window.location.origin}/join/${room.id}`;
+  useEffect(() => {
+    if (!sessionStarted || !peerReady) return;
 
-  const copyLink = async () => {
-    await navigator.clipboard.writeText(inviteLink);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    const unsubscribe = onSnapshot(collection(roomRef, "peers"), (snapshot) => {
+      snapshot.docChanges().forEach(async (change) => {
+        if (change.type === "added") {
+          const data = change.doc.data();
+          if (data.userId !== user.uid && !peersRef.current[data.userId]) {
+            const myDoc = await getDoc(doc(roomRef, "peers", user.uid));
+            if (myDoc.exists() && myDoc.data().timestamp < data.timestamp) {
+              setTimeout(() => {
+                if (peerRef.current && localStreamRef.current) {
+                  const call = peerRef.current.call(data.peerId, localStreamRef.current);
+                  call.on("stream", (remoteStream) => {
+                    setRemoteStreams(prev => ({ ...prev, [data.userId]: remoteStream }));
+                  });
+                  peersRef.current[data.userId] = call;
+                }
+              }, 2000); // 2 second delay to ensure newcomer is fully ready
+            }
+          }
+        }
+      });
+    });
+    return unsubscribe;
+  }, [sessionStarted, peerReady]);
+
+  // UI Handlers
+  const startSession = () => updateDoc(roomRef, { sessionStarted: true });
+  const copyLink = () => { navigator.clipboard.writeText(inviteLink); setCopied(true); setTimeout(() => setCopied(false), 2000); };
+  const sendMessage = async () => {
+    if (!newMessage.trim()) return;
+    await addDoc(collection(roomRef, "messages"), {
+      senderId: user.uid,
+      username: user.username || user.email.split("@")[0],
+      text: newMessage.trim(),
+      timestamp: new Date(),
+    });
+    setNewMessage("");
   };
+
+  const toggleMic = () => {
+    const track = localStreamRef.current?.getAudioTracks()[0];
+    if (track) { track.enabled = !micOn; setMicOn(!micOn); }
+  };
+
+  const toggleVideo = () => {
+    const track = localStreamRef.current?.getVideoTracks()[0];
+    if (track) { track.enabled = !videoOn; setVideoOn(!videoOn); }
+  };
+
+  const leaveSession = async () => {
+    if (isHost) await deleteDoc(roomRef);
+    onBack();
+  };
+
+  if (!sessionStarted) {
+    return (
+      <div className="flex min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 text-white items-center justify-center p-4">
+        <div className="bg-white/10 backdrop-blur-xl rounded-3xl p-8 w-full max-w-lg shadow-2xl border border-white/20">
+          <div className="text-center mb-6">
+            <h2 className="text-3xl font-bold mb-2 bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">{room.name}</h2>
+            <p className="text-gray-300 text-sm">Pre-Session Lobby</p>
+          </div>
+          <div className="mb-6">
+            <label className="text-sm font-semibold text-gray-300 mb-2 block">Invite Link</label>
+            <div className="bg-black/40 rounded-xl px-4 py-3 flex items-center justify-between gap-3 border border-white/10">
+              <span className="text-sm truncate flex-1 text-gray-200">{inviteLink}</span>
+              <button onClick={copyLink} className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-sm font-medium transition-all flex items-center gap-2">
+                {copied ? <><FaCheck /> Copied</> : <><FaCopy /> Copy</>}
+              </button>
+            </div>
+          </div>
+          <div className="mb-6">
+            <h3 className="font-semibold text-lg mb-3 flex items-center gap-2">
+              <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
+              Participants ({buddies.length})
+            </h3>
+            <div className="bg-black/30 rounded-xl p-4 max-h-48 overflow-y-auto border border-white/10">
+              <ul className="space-y-2">
+                {buddies.map((b) => (
+                  <li key={b.uid} className="flex items-center justify-between bg-white/5 rounded-lg px-3 py-2">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-sm font-bold">{b.username?.charAt(0).toUpperCase()}</div>
+                      <span className="font-medium">{b.username}</span>
+                    </div>
+                    {b.uid === room.createdBy && <span className="bg-yellow-500/20 text-yellow-300 text-xs px-2 py-1 rounded-full font-semibold">Host</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+          <div className="space-y-3">
+            {isHost ? (
+              <button onClick={startSession} disabled={buddies.length === 0} className="w-full bg-gradient-to-r from-green-500 to-emerald-600 py-3 rounded-xl font-semibold text-lg shadow-lg transition-all">▶ Start Session</button>
+            ) : (
+              <div className="bg-blue-500/20 border border-blue-400/30 rounded-xl px-4 py-3 text-center text-blue-200 text-sm">Waiting for host...</div>
+            )}
+            <button onClick={leaveSession} className="w-full bg-red-600/80 py-3 rounded-xl font-semibold transition-all flex items-center justify-center gap-2"><FaSignOutAlt /> {isHost ? "End Room" : "Leave Room"}</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen bg-gray-900 text-white overflow-hidden">
-      {/* Main content */}
-      <div className="flex-1 flex flex-col relative">
-        {/* Header */}
-        <div className="absolute top-4 left-4 z-20 flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="bg-white/10 hover:bg-white/20 px-3 py-1 rounded-md transition flex items-center gap-2 font-medium"
-          >
-            <FaArrowLeft /> Exit
-          </button>
-          <div className="px-3 py-1 rounded-md bg-black/40 font-medium">
-            {room.name || "Study Buddy Room"}
+      <div className="flex-1 flex flex-col">
+        <div className="bg-gray-800 px-4 py-3 flex justify-between items-center border-b border-gray-700">
+          <div className="flex items-center gap-3">
+            <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+            <h3 className="font-semibold">{room.name}</h3>
           </div>
-          <div className="px-3 py-1 rounded-md bg-green-600 font-semibold flex items-center gap-2">
-            <FaLock className="text-sm" /> Private
-          </div>
+          <button onClick={leaveSession} className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg font-medium flex items-center gap-2"><FaSignOutAlt /> {isHost ? "End" : "Leave"}</button>
         </div>
 
-        {/* Center content */}
-        <div className="flex-1 flex items-center justify-center px-4">
-          <div className="bg-white/5 backdrop-blur-md rounded-2xl p-8 w-full max-w-[420px] shadow-xl border border-white/10">
-            {isHost ? (
-              <>
-                {/* HOST VIEW */}
-                <h2 className="text-2xl font-semibold mb-2">Invite your study buddies</h2>
-                <p className="text-sm text-gray-300 mb-6">
-                  Share this link with your friends to study together in real time.
-                </p>
-
-                {/* Invite Link Box */}
-                <div className="bg-black/40 rounded-lg px-4 py-3 flex items-center justify-between gap-2 mb-6 border border-white/10">
-                  <span className="text-sm truncate text-gray-300">{inviteLink}</span>
-                  <button
-                    onClick={copyLink}
-                    className="px-3 py-1 rounded-md bg-blue-600 hover:bg-blue-700 text-sm font-medium transition flex items-center gap-2 whitespace-nowrap"
-                  >
-                    <FaCopy className="text-xs" />
-                    {copied ? "Copied" : "Copy"}
-                  </button>
+        <div className="flex-1 bg-gray-950 p-4 overflow-auto">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 max-w-6xl mx-auto">
+            <div className="relative bg-gray-800 rounded-xl overflow-hidden shadow-lg aspect-video">
+              <video ref={myVideoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+              <div className="absolute bottom-3 left-3 bg-black/70 backdrop-blur-sm px-3 py-1 rounded-full text-sm font-medium">{user.username} (You)</div>
+              {!videoOn && (
+                <div className="absolute inset-0 bg-gray-900 flex items-center justify-center">
+                  <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-500 to-purple-500 flex items-center justify-center text-3xl font-bold">{user.username?.charAt(0).toUpperCase()}</div>
                 </div>
-
-                {/* Description */}
-                <div className="p-4 bg-blue-900/20 border border-blue-500/30 rounded-lg mb-6">
-                  <p className="text-xs text-blue-200">
-                    📌 {room.description || "Join this study room and focus together!"}
-                  </p>
-                </div>
-
-                {/* Action Buttons - Host Only */}
-                <div className="grid grid-cols-2 gap-3 mb-6">
-                  <button className="bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 px-4 py-2 rounded-lg transition font-medium text-sm">
-                    ▶ Start Session
-                  </button>
-                  <button className="bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg transition font-medium text-sm">
-                    ⚙ Settings
-                  </button>
-                </div>
-
-                <div className="text-xs text-gray-400 text-center">
-                  🔒 Only users with this link can join this room.
-                </div>
-              </>
-            ) : (
-              <>
-                {/* MEMBER VIEW - Waiting for session to start */}
-                <h2 className="text-2xl font-semibold mb-2">Waiting for host...</h2>
-                <p className="text-sm text-gray-300 mb-6">
-                  The host will start the study session shortly.
-                </p>
-
-                {/* Room Info */}
-                <div className="p-4 bg-blue-900/20 border border-blue-500/30 rounded-lg mb-6">
-                  <p className="text-xs text-blue-200">
-                    📌 {room.description || "Join this study room and focus together!"}
-                  </p>
-                </div>
-
-                {/* Waiting Message */}
-                <div className="p-6 bg-white/10 border border-white/20 rounded-lg text-center">
-                  <p className="text-sm text-gray-300 mb-2">⏳ Waiting for host to start session...</p>
-                  <p className="text-xs text-gray-400">Check the buddy list to see who's here</p>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Right panel - Study Buddies */}
-      <div className="w-80 bg-white text-black flex flex-col shadow-xl border-l border-gray-200">
-        {/* Header */}
-        <div className="p-5 border-b border-gray-200 bg-gradient-to-r from-blue-50 to-purple-50">
-          <h3 className="text-lg font-semibold text-gray-800">Study Buddies</h3>
-          <p className="text-sm text-gray-600">{buddies.length} people in this room</p>
-        </div>
-
-        {/* Buddies List */}
-        <div className="flex-1 p-4 space-y-4 overflow-y-auto">
-          {loading ? (
-            <div className="text-center text-gray-500">Loading buddies...</div>
-          ) : buddies.length === 0 ? (
-            <div className="flex items-center gap-3 p-3 rounded-lg opacity-50">
-              <div className="w-10 h-10 rounded-full bg-gray-300 flex items-center justify-center text-gray-600 text-sm font-bold">
-                ?
-              </div>
-              <div className="flex-1">
-                <p className="text-sm text-gray-600">Waiting for buddies…</p>
-                <p className="text-xs text-gray-400">Share the invite link</p>
-              </div>
+              )}
             </div>
-          ) : (
-            buddies.map((buddy) => (
-              <div
-                key={buddy.uid}
-                className={`flex items-center gap-3 p-3 rounded-lg border ${
-                  buddy.uid === user?.uid
-                    ? "bg-blue-50 border-blue-200"
-                    : "bg-gray-50 border-gray-200"
-                }`}
-              >
-                {/* Avatar */}
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold ${
-                  buddy.uid === user?.uid
-                    ? "bg-gradient-to-r from-blue-400 to-blue-600"
-                    : "bg-gradient-to-r from-purple-400 to-pink-600"
-                } shadow-md`}>
-                  {buddy.photoBase64 ? (
-                    <img
-                      src={buddy.photoBase64}
-                      alt={buddy.username}
-                      className="w-full h-full rounded-full object-cover"
-                    />
-                  ) : (
-                    buddy.username?.charAt(0).toUpperCase() || "U"
-                  )}
-                </div>
 
-                {/* User Info */}
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-gray-800">
-                    {buddy.username || buddy.email?.split("@")[0] || "User"}
-                  </p>
-                  <p className="text-xs text-gray-500">
-                    {buddy.uid === user?.uid ? (
-                      <span className="text-blue-600 font-medium">👑 You</span>
-                    ) : buddy.uid === room.createdBy ? (
-                      <span className="text-purple-600 font-medium">👑 Host</span>
-                    ) : (
-                      <span className="text-gray-500">Member</span>
-                    )}
-                  </p>
-                </div>
-              </div>
-            ))
-          )}
+            {buddies.filter(b => b.uid !== user.uid).map((buddy) => (
+              <RemoteVideo key={buddy.uid} buddy={buddy} stream={remoteStreams[buddy.uid]} />
+            ))}
+          </div>
         </div>
 
-        {/* Footer Tip */}
-        <div className="p-4 border-t border-gray-200 bg-gray-50">
-          <p className="text-xs text-gray-600 text-center">
-            💡 Tip: Share the invite link on WhatsApp or Discord
-          </p>
+        <div className="bg-gray-800 px-4 py-4 flex justify-center items-center gap-3 border-t border-gray-700">
+          <button onClick={toggleMic} className={`p-4 rounded-full transition-all ${micOn ? 'bg-gray-700' : 'bg-red-600'}`}>{micOn ? <FaMicrophone /> : <FaMicrophoneSlash />}</button>
+          <button onClick={toggleVideo} className={`p-4 rounded-full transition-all ${videoOn ? 'bg-gray-700' : 'bg-red-600'}`}>{videoOn ? <FaVideo /> : <FaVideoSlash />}</button>
+          <button onClick={() => setShowChat(!showChat)} className={`p-4 rounded-full transition-all ${showChat ? 'bg-blue-600' : 'bg-gray-700'}`}><FaCommentDots /></button>
         </div>
       </div>
+
+      {showChat && (
+        <div className="w-80 bg-gray-800 flex flex-col border-l border-gray-700">
+          <div className="px-4 py-3 border-b border-gray-700 flex justify-between items-center"><h3 className="font-semibold text-lg">Chat</h3><button onClick={() => setShowChat(false)}>✕</button></div>
+          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+            {messages.map((msg) => (
+              <div key={msg.id} className={`flex ${msg.senderId === user.uid ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[75%] rounded-lg px-3 py-2 ${msg.senderId === user.uid ? 'bg-blue-600' : 'bg-gray-700'}`}>
+                  <div className="text-xs font-semibold mb-1 opacity-80">{msg.username}</div>
+                  <div className="text-sm break-words">{msg.text}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="p-4 border-t border-gray-700">
+            <div className="flex gap-2">
+              <input value={newMessage} onChange={(e) => setNewMessage(e.target.value)} onKeyDown={(e) => e.key === "Enter" && sendMessage()} placeholder="Type a message..." className="flex-1 px-3 py-2 rounded-lg bg-gray-700 focus:outline-none" />
+              <button onClick={sendMessage} className="bg-blue-600 px-4 py-2 rounded-lg">Send</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RemoteVideo({ buddy, stream }) {
+  const videoRef = useRef();
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (video && stream) {
+      video.srcObject = stream;
+      // Force play because some browsers block auto-play until explicitly told
+      video.onloadedmetadata = () => {
+        video.play().catch(e => console.error("Auto-play failed:", e));
+      };
+    }
+  }, [stream]);
+
+  return (
+    <div className="relative bg-gray-800 rounded-xl overflow-hidden shadow-lg aspect-video">
+      {/* Video is always rendered but visible only when stream exists */}
+      <video 
+        ref={videoRef} 
+        autoPlay 
+        playsInline 
+        className={`w-full h-full object-cover ${!stream ? 'hidden' : 'block'}`} 
+      />
+      {!stream && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900">
+          <div className="w-16 h-16 rounded-full bg-gray-700 flex items-center justify-center text-2xl font-bold mb-2 animate-pulse">{buddy.username?.charAt(0).toUpperCase()}</div>
+          <p className="text-gray-500 text-xs">Waiting for video...</p>
+        </div>
+      )}
+      <div className="absolute bottom-3 left-3 bg-black/70 backdrop-blur-sm px-3 py-1 rounded-full text-sm font-medium">{buddy.username}</div>
     </div>
   );
 }

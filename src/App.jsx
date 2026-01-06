@@ -205,7 +205,9 @@ export default function App() {
     setSelectedRoom(null);
   };
 
-  // Loading & Conditional Rendering
+  // --- RENDERING LOGIC ---
+
+  // 1. Handle Loading State
   if (user === undefined)
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-blue-50">
@@ -216,17 +218,21 @@ export default function App() {
       </div>
     );
 
-  // Show Home if not logged in and not guest
+  // 2. MOVE THIS HERE: Show Login page if showLogin is true
+  // This ensures that when Home.jsx calls onLoginClick, this screen appears immediately.
+  if (showLogin) return <Login onLogin={() => setShowLogin(false)} onBack={() => setShowLogin(false)} />;
+
+  // 3. Special login for join invite links
+  if (showJoinLoginModal && pendingRoomId) {
+    return <Login onLogin={() => setShowJoinLoginModal(false)} onBack={() => setShowJoinLoginModal(false)} />;
+  }
+
+  // 4. Show Home only if no user and not a guest
   if (!user && !isGuest)
     return <Home onGuest={() => setIsGuest(true)} onLoginClick={() => setShowLogin(true)} />;
 
-  if (showLogin) return <Login onLogin={() => setShowLogin(false)} />;
-
-  // Special login modal for join invite links
-  if (showJoinLoginModal && pendingRoomId) {
-    return <Login onLogin={() => setShowJoinLoginModal(false)} />;
-  }
-
+  // 5. Auth-protected Views (These stay exactly as they were)
+  // Since user is now defined or isGuest is true, your study buddy logic will work here
   if (editingProfile)
     return <EditProfile user={profile} onSave={handleProfileUpdate} onCancel={() => setEditingProfile(false)} />;
 
@@ -242,6 +248,7 @@ export default function App() {
   if (selectedRoom)
     return <RoomMessages room={selectedRoom} user={profile} onBack={() => setSelectedRoom(null)} />;
 
+  // 6. Main App Dashboard
   return (
     <StudyRoomList
       user={profile}
