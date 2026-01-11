@@ -137,6 +137,12 @@ export default function App() {
     setCreatingRoom(true);
   };
 
+  const initialTimer = {
+    timeLeft: 1500,
+    isRunning: false,
+    mode: "work",
+  };
+
   const handleSaveRoom = async (roomData) => {
     try {
       const docRef = await addDoc(collection(db, "studyRooms"), {
@@ -144,6 +150,7 @@ export default function App() {
         createdBy: user.uid,
         createdAt: new Date(),
         participants: [],
+        timer: initialTimer,
       });
 
       const newRoom = {
@@ -168,6 +175,7 @@ export default function App() {
     }
     setCreatingStudyBuddy(true);
   };
+  
 
   const handleSaveStudyBuddyRoom = async (roomData) => {
     try {
@@ -178,6 +186,7 @@ export default function App() {
         participants: [],
         isPrivate: true,
         type: "studyBuddy",
+        timer: initialTimer,
       });
 
       const newRoom = {
@@ -187,6 +196,7 @@ export default function App() {
         participants: [],
         isPrivate: true,
         type: "studyBuddy",
+        timer: initialTimer,
       };
 
       console.log("StudyBuddy Room Created:", newRoom);

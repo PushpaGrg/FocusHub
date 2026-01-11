@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { db } from "../firebase";
 import { FaPlus, FaLayerGroup, FaSignOutAlt, FaUser, FaVideo } from "react-icons/fa";
 import CreateRoom from "./CreateRoom";
-import { addDoc, collection, getDocs, serverTimestamp } from "firebase/firestore";
+import { addDoc, collection, onSnapshot, query, orderBy, serverTimestamp } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
 export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProfile, onCreateRoom, onOpenStudyBuddyRoom }) {
@@ -11,34 +11,57 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [showMyRooms, setShowMyRooms] = useState(false);
   const [showCreateRoom, setShowCreateRoom] = useState(false);
+  
+  // NEW: State to track active cooldowns locally
+  const [cooldowns, setCooldowns] = useState({});
+
   const auth = getAuth();
   const firebaseUser = auth.currentUser;
 
+  // Real-time listener for live updates
   useEffect(() => {
-    const fetchRooms = async () => {
-      const snapshot = await getDocs(collection(db, "studyRooms"));
+    const q = query(collection(db, "studyRooms"), orderBy("createdAt", "desc"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       const fetchedRooms = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      console.log("Fetched rooms:", fetchedRooms);
-      console.log("Current user UID:", firebaseUser?.uid);
       setRooms(fetchedRooms);
-    };
-    fetchRooms();
-  }, [firebaseUser?.uid]);
+    });
+    
+    return () => unsubscribe();
+  }, []);
+
+  // NEW: Effect to manage the cooldown countdowns
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const newCooldowns = {};
+      rooms.forEach(room => {
+        const cooldownUntil = localStorage.getItem(`cooldown_${room.id}`);
+        if (cooldownUntil) {
+          const timeLeft = Math.ceil((parseInt(cooldownUntil) - Date.now()) / 1000);
+          if (timeLeft > 0) {
+            newCooldowns[room.id] = timeLeft;
+          } else {
+            localStorage.removeItem(`cooldown_${room.id}`);
+          }
+        }
+      });
+      setCooldowns(newCooldowns);
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [rooms]);
 
   const username = user?.username || user?.email?.split("@")[0];
   const currentUserId = firebaseUser?.uid || user?.uid;
   
   const filteredRooms = rooms.filter(room => {
     if (!showMyRooms) return true;
-    console.log("Comparing:", room.createdBy, "with", currentUserId);
     return room.createdBy === currentUserId;
   });
 
-  // Get user's created rooms
   const userCreatedRooms = rooms.filter(room => room.createdBy === currentUserId);
 
   const handleStudyBuddyClick = () => {
-    onOpenStudyBuddyRoom(); // This will trigger the create form
+    onOpenStudyBuddyRoom();
   };
 
   return (
@@ -51,8 +74,7 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Study Buddy Room Button */}
-            {userCreatedRooms.length > 0 && (
+            {rooms.length > 0 && (
               <button
                 onClick={handleStudyBuddyClick}
                 className="flex items-center gap-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white px-4 py-2 rounded-lg hover:from-blue-600 hover:to-purple-700 transition transform hover:scale-105 shadow-md font-medium"
@@ -61,7 +83,6 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
               </button>
             )}
 
-            {/* Create Room Button */}
             <button
               onClick={() => setShowCreateRoom(true)}
               className="flex items-center gap-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white px-4 py-2 rounded-lg hover:from-blue-600 hover:to-purple-700 transition transform hover:scale-105 shadow-md font-medium"
@@ -69,7 +90,6 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
               <FaPlus /> Create Room
             </button>
 
-            {/* My Rooms Toggle */}
             <button
               onClick={() => setShowMyRooms(!showMyRooms)}
               className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition transform hover:scale-105 shadow-md ${
@@ -81,7 +101,6 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
               <FaLayerGroup /> {showMyRooms ? "All Rooms" : "My Rooms"}
             </button>
 
-            {/* Profile Dropdown */}
             <div className="relative">
               <div
                 className="flex items-center gap-3 cursor-pointer bg-white border-2 border-gray-300 px-4 py-2 rounded-lg hover:border-blue-500 transition"
@@ -125,7 +144,6 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
       {/* Main Content */}
       <div className="pt-24 px-6 pb-12">
         <div className="max-w-7xl mx-auto">
-          {/* Header */}
           <div className="mb-8">
             <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
               {showMyRooms ? "My Study Rooms" : "Study Rooms"}
@@ -137,7 +155,6 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
             </p>
           </div>
 
-          {/* Rooms Grid */}
           {filteredRooms.length === 0 ? (
             <div className="text-center py-20">
               <div className="text-6xl mb-4">📚</div>
@@ -162,47 +179,49 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                 <div
                   key={room.id}
                   className="bg-white rounded-2xl shadow-lg overflow-hidden hover:shadow-2xl transform hover:-translate-y-2 transition-all duration-300 border-t-4 border-blue-500 cursor-pointer"
-                  onClick={() => onSelectRoom(room)}
+                  onClick={() => !cooldowns[room.id] && onSelectRoom(room)}
                 >
-                  {/* Video Preview */}
-                  <div className="relative h-48 bg-gradient-to-br from-blue-400 to-purple-500 overflow-hidden">
-                    <video
-                      className="w-full h-full object-cover"
-                      src={room.previewURL || "/src/assets/girlstudy.mp4"}
-                      autoPlay
-                      muted
-                      loop
-                    />
+                  <div className="relative h-48 bg-gray-200 overflow-hidden">
+                    {room.liveThumbnail ? (
+                      <img 
+                        src={room.liveThumbnail} 
+                        alt="Live Preview" 
+                        loading="eager"
+                        className="room-thumbnail-img animate-fadeIn"
+                      />
+                    ) : (
+                      <video
+                        className="w-full h-full object-cover"
+                        src={room.previewURL || "/src/assets/girlstudy.mp4"}
+                        autoPlay
+                        muted
+                        loop
+                      />
+                    )}
                     
-                    {/* Live Badge */}
-                    <div className="absolute top-3 left-3 flex items-center gap-2 bg-red-600 text-white px-3 py-1 rounded-full text-xs font-bold shadow-lg">
+                    <div className="absolute top-3 left-3 flex items-center gap-2 bg-red-600 text-white px-3 py-1 rounded-full text-xs font-bold shadow-lg z-10">
                       <span className="w-2 h-2 bg-white rounded-full animate-pulse"></span>
-                      LIVE
+                      {room.isLive ? "LIVE" : "OFFLINE"}
                     </div>
                     
-                    {/* Viewers Count */}
-                    <div className="absolute top-3 right-3 bg-black/50 backdrop-blur-sm text-white px-3 py-1 rounded-full text-sm font-semibold">
+                    <div className="absolute top-3 right-3 bg-black/50 backdrop-blur-sm text-white px-3 py-1 rounded-full text-sm font-semibold z-10">
                       👀 {Math.floor(Math.random() * 150 + 30)}
                     </div>
                     
-                    {/* Gradient Overlay */}
                     <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent"></div>
                     
-                    {/* Room Name on Video */}
-                    <div className="absolute bottom-3 left-3 right-3">
+                    <div className="absolute bottom-3 left-3 right-3 z-10">
                       <h3 className="text-white font-bold text-xl drop-shadow-lg">
                         {room.name}
                       </h3>
                     </div>
                   </div>
 
-                  {/* Card Content */}
                   <div className="p-6">
                     <p className="text-gray-600 text-sm mb-4 line-clamp-2 min-h-[40px]">
                       {room.description || "Join this study room and focus together!"}
                     </p>
                     
-                    {/* Host Badge (if user created this room) */}
                     {room.createdBy === currentUserId && (
                       <div className="mb-3 flex items-center gap-2">
                         <span className="inline-block bg-gradient-to-r from-purple-100 to-pink-100 text-purple-700 px-3 py-1 rounded-full text-xs font-semibold">
@@ -216,14 +235,20 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                       </div>
                     )}
 
+                    {/* UPDATED BUTTON: Disables and shows countdown if on cooldown */}
                     <button
+                      disabled={!!cooldowns[room.id]}
                       onClick={(e) => {
                         e.stopPropagation();
                         onSelectRoom(room);
                       }}
-                      className="w-full bg-gradient-to-r from-blue-500 to-purple-600 text-white py-3 rounded-lg font-semibold hover:from-blue-600 hover:to-purple-700 transition transform hover:scale-105 shadow-md"
+                      className={`w-full py-3 rounded-lg font-semibold transition transform shadow-md ${
+                        cooldowns[room.id] 
+                        ? "bg-gray-400 cursor-not-allowed text-white scale-100" 
+                        : "bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:from-blue-600 hover:to-purple-700 hover:scale-105"
+                      }`}
                     >
-                      Join Room
+                      {cooldowns[room.id] ? `Cooldown (${cooldowns[room.id]}s)` : "Join Room"}
                     </button>
                   </div>
                 </div>
@@ -255,57 +280,58 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                   ...roomData,
                   createdBy: firebaseUser.uid,
                   createdAt: serverTimestamp(),
-                  participants: [], // Add this line
+                  participants: [],
+                  isLive: false,
+                  liveThumbnail: null
                 };
 
-                const docRef = await addDoc(collection(db, "studyRooms"), newRoom);
-                setRooms(prev => [...prev, { id: docRef.id, ...newRoom }]);
+                await addDoc(collection(db, "studyRooms"), newRoom);
                 setShowCreateRoom(false);
-
-                // Automatically open room as HOST
-                onSelectRoom({ id: docRef.id, ...newRoom, isHost: true });
               }}
             />
           </div>
         </div>
       )}
 
-      {/* Styles */}
       <style>
         {`
-          /* Slide Down Animation for Dropdown */
-          .animate-slideDown {
-            animation: slideDown 0.2s ease-out;
-          }
-
+          .animate-slideDown { animation: slideDown 0.2s ease-out; }
           @keyframes slideDown {
-            from {
-              opacity: 0;
-              transform: translateY(-10px);
-            }
-            to {
-              opacity: 1;
-              transform: translateY(0);
-            }
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
           }
 
-          /* Slide Up Animation for Modal */
-          .animate-slideUp {
-            animation: slideUp 0.3s ease-out;
-          }
-
+          .animate-slideUp { animation: slideUp 0.3s ease-out; }
           @keyframes slideUp {
-            from {
-              opacity: 0;
-              transform: translateY(20px);
-            }
-            to {
-              opacity: 1;
-              transform: translateY(0);
-            }
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
           }
 
-          /* Line Clamp */
+          .animate-fadeIn { 
+            animation: fastFade 0.4s ease-in-out; 
+            backface-visibility: hidden;
+          }
+          
+          @keyframes fastFade {
+            0% { opacity: 0.7; filter: contrast(1.1); }
+            100% { opacity: 1; filter: contrast(1); }
+          }
+
+          .room-thumbnail-img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            image-rendering: -webkit-optimize-contrast; 
+            transition: opacity 0.2s ease-in-out;
+            background-color: #000;
+            animation: subtleShake 4s ease-in-out infinite alternate;
+          }
+
+          @keyframes subtleShake {
+            0% { transform: scale(1.02) translateX(0); }
+            100% { transform: scale(1.05) translateX(1px); }
+          }
+
           .line-clamp-2 {
             display: -webkit-box;
             -webkit-line-clamp: 2;
@@ -313,15 +339,11 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
             overflow: hidden;
           }
 
-          /* Pulse Animation for Live Badge */
           @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(0.98); }
           }
-
-          .animate-pulse {
-            animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
-          }
+          .animate-pulse { animation: pulse 2s infinite; }
         `}
       </style>
     </div>

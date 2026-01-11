@@ -1,10 +1,12 @@
 import { useState, useEffect, useRef } from "react";
-import { FaMicrophone, FaMicrophoneSlash, FaVideo, FaVideoSlash, FaCommentDots, FaCopy, FaCheck, FaSignOutAlt } from "react-icons/fa";
+import { FaMicrophone, FaMicrophoneSlash, FaVideo, FaVideoSlash, FaCommentDots, FaCopy, FaCheck, FaSignOutAlt, FaPlay, FaPause, FaUndo, FaExclamationTriangle } from "react-icons/fa";
 import { db } from "../firebase";
-import { doc, onSnapshot, updateDoc, arrayUnion, arrayRemove, collection, addDoc, query, orderBy, deleteDoc, writeBatch, getDocs, setDoc, getDoc } from "firebase/firestore";
+import { doc, onSnapshot, updateDoc, arrayUnion, arrayRemove, collection, addDoc, query, orderBy, deleteDoc, setDoc, getDoc } from "firebase/firestore";
 import Peer from "peerjs";
+import { containsSpam } from "../utils/spamDetection";
 
 export default function StudyBuddyRoom({ room, user, onBack }) {
+  const [timerData, setTimerData] = useState({ timeLeft: 1500, isRunning: false, mode: 'work' });
   const [buddies, setBuddies] = useState([]);
   const [copied, setCopied] = useState(false);
   const [sessionStarted, setSessionStarted] = useState(false);
@@ -15,6 +17,7 @@ export default function StudyBuddyRoom({ room, user, onBack }) {
   const [newMessage, setNewMessage] = useState("");
   const [remoteStreams, setRemoteStreams] = useState({});
   const [peerReady, setPeerReady] = useState(false);
+  const [spamWarnings, setSpamWarnings] = useState(0);
 
   const myVideoRef = useRef();
   const peersRef = useRef({}); 
@@ -25,6 +28,36 @@ export default function StudyBuddyRoom({ room, user, onBack }) {
   const roomRef = doc(db, "studyRooms", room.id);
   const inviteLink = `${window.location.origin}/join/${room.id}`;
 
+  // --- TIMER LOGIC ---
+  useEffect(() => {
+    const unsubscribe = onSnapshot(roomRef, (docSnap) => {
+      if (docSnap.exists() && docSnap.data().timer) {
+        setTimerData(docSnap.data().timer);
+      }
+    });
+    return unsubscribe;
+  }, [room.id]);
+
+  useEffect(() => {
+    let interval = null;
+    if (isHost && timerData.isRunning && timerData.timeLeft > 0) {
+      interval = setInterval(async () => {
+        await updateDoc(roomRef, { "timer.timeLeft": timerData.timeLeft - 1 });
+      }, 1000);
+    } else if (isHost && timerData.timeLeft === 0) {
+      const nextMode = timerData.mode === "work" ? "break" : "work";
+      updateDoc(roomRef, {
+        timer: {
+          timeLeft: nextMode === "work" ? 1500 : 300,
+          isRunning: false,
+          mode: nextMode
+        }
+      });
+    }
+    return () => clearInterval(interval);
+  }, [isHost, timerData.isRunning, timerData.timeLeft]);
+
+  // --- ROOM LOGIC ---
   useEffect(() => {
     const unsubscribe = onSnapshot(roomRef, (docSnap) => {
       if (docSnap.exists()) {
@@ -57,6 +90,7 @@ export default function StudyBuddyRoom({ room, user, onBack }) {
     };
   }, [room.id, user.uid]);
 
+  // --- CHAT & SPAM LOGIC ---
   useEffect(() => {
     if (!sessionStarted) return;
     const q = query(collection(roomRef, "messages"), orderBy("timestamp", "asc"));
@@ -65,27 +99,77 @@ export default function StudyBuddyRoom({ room, user, onBack }) {
     });
   }, [room.id, sessionStarted]);
 
-  // PeerJS & Media Initialization
+  // FIXED: Standard leave logic (No permanent ban)
+  const leaveSession = async () => { 
+    try {
+      const userData = {
+        uid: user.uid,
+        username: user.username || user.email.split("@")[0],
+        email: user.email,
+      };
+      const snap = await getDoc(roomRef);
+      if (snap.exists()) {
+        if (isHost) {
+          await deleteDoc(roomRef);
+        } else {
+          await updateDoc(roomRef, { participants: arrayRemove(userData) });
+        }
+      }
+      await deleteDoc(doc(roomRef, "peers", user.uid)).catch(() => {});
+    } catch (err) {
+      console.error("Leave error:", err);
+    }
+    onBack(); 
+  };
+
+  // FIXED: Kick logic with Cooldown
+  const sendMessage = async () => {
+    const trimmedMsg = newMessage.trim();
+    if (!trimmedMsg) return;
+
+    if (containsSpam(trimmedMsg)) {
+      const newWarningCount = spamWarnings + 1;
+      
+      if (newWarningCount >= 3) {
+        // Set cooldown timestamp (Current time + 60 seconds)
+        const cooldownUntil = Date.now() + 60000;
+        localStorage.setItem(`cooldown_${room.id}`, cooldownUntil);
+        
+        alert("❌ You have been kicked for spamming. You can re-join in 60 seconds.");
+        leaveSession();
+        return;
+      }
+
+      setSpamWarnings(newWarningCount);
+      setNewMessage("");
+      alert(`⚠️ Spam detected! Warning ${newWarningCount}/3. One more and you will be kicked.`);
+      return;
+    }
+
+    await addDoc(collection(roomRef, "messages"), {
+      senderId: user.uid,
+      username: user.username || user.email.split("@")[0],
+      text: trimmedMsg,
+      timestamp: new Date(),
+    });
+    setNewMessage("");
+  };
+
+  // --- VIDEO/PEER LOGIC ---
   useEffect(() => {
     if (!sessionStarted) return;
-
     const initMedia = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         localStreamRef.current = stream;
-        if (myVideoRef.current) {
-          myVideoRef.current.srcObject = stream;
-        }
-
+        if (myVideoRef.current) myVideoRef.current.srcObject = stream;
         const peer = new Peer(user.uid, {
           host: "0.peerjs.com",
           port: 443,
           secure: true,
           config: { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] }
         });
-
         peerRef.current = peer;
-
         peer.on("open", async (id) => {
           setPeerReady(true);
           await setDoc(doc(roomRef, "peers", user.uid), {
@@ -94,22 +178,15 @@ export default function StudyBuddyRoom({ room, user, onBack }) {
             timestamp: Date.now() 
           });
         });
-
         peer.on("call", (call) => {
           call.answer(localStreamRef.current);
           call.on("stream", (remoteStream) => {
-            // Trigger state update with a fresh object reference
             setRemoteStreams(prev => ({ ...prev, [call.peer]: remoteStream }));
           });
         });
-
-      } catch (err) {
-        alert("Camera/Mic access denied.");
-      }
+      } catch (err) { alert("Camera/Mic access denied."); }
     };
-
     initMedia();
-
     return () => {
       if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop());
       if (peerRef.current) peerRef.current.destroy();
@@ -118,7 +195,6 @@ export default function StudyBuddyRoom({ room, user, onBack }) {
 
   useEffect(() => {
     if (!sessionStarted || !peerReady) return;
-
     const unsubscribe = onSnapshot(collection(roomRef, "peers"), (snapshot) => {
       snapshot.docChanges().forEach(async (change) => {
         if (change.type === "added") {
@@ -134,7 +210,7 @@ export default function StudyBuddyRoom({ room, user, onBack }) {
                   });
                   peersRef.current[data.userId] = call;
                 }
-              }, 2000); // 2 second delay to ensure newcomer is fully ready
+              }, 2000);
             }
           }
         }
@@ -143,33 +219,16 @@ export default function StudyBuddyRoom({ room, user, onBack }) {
     return unsubscribe;
   }, [sessionStarted, peerReady]);
 
-  // UI Handlers
   const startSession = () => updateDoc(roomRef, { sessionStarted: true });
   const copyLink = () => { navigator.clipboard.writeText(inviteLink); setCopied(true); setTimeout(() => setCopied(false), 2000); };
-  const sendMessage = async () => {
-    if (!newMessage.trim()) return;
-    await addDoc(collection(roomRef, "messages"), {
-      senderId: user.uid,
-      username: user.username || user.email.split("@")[0],
-      text: newMessage.trim(),
-      timestamp: new Date(),
-    });
-    setNewMessage("");
-  };
 
   const toggleMic = () => {
     const track = localStreamRef.current?.getAudioTracks()[0];
     if (track) { track.enabled = !micOn; setMicOn(!micOn); }
   };
-
   const toggleVideo = () => {
     const track = localStreamRef.current?.getVideoTracks()[0];
     if (track) { track.enabled = !videoOn; setVideoOn(!videoOn); }
-  };
-
-  const leaveSession = async () => {
-    if (isHost) await deleteDoc(roomRef);
-    onBack();
   };
 
   if (!sessionStarted) {
@@ -222,14 +281,43 @@ export default function StudyBuddyRoom({ room, user, onBack }) {
   }
 
   return (
-    <div className="flex h-screen bg-gray-900 text-white overflow-hidden">
-      <div className="flex-1 flex flex-col">
+    <div className="flex h-screen bg-gray-900 text-white overflow-hidden relative">
+      <div className="flex-1 flex flex-col relative">
         <div className="bg-gray-800 px-4 py-3 flex justify-between items-center border-b border-gray-700">
           <div className="flex items-center gap-3">
             <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
             <h3 className="font-semibold">{room.name}</h3>
           </div>
           <button onClick={leaveSession} className="bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg font-medium flex items-center gap-2"><FaSignOutAlt /> {isHost ? "End" : "Leave"}</button>
+        </div>
+
+        <div className="absolute top-20 left-1/2 -translate-x-1/2 z-50">
+          <div className="bg-black/40 backdrop-blur-md border border-white/20 p-1 rounded-2xl flex items-center shadow-xl">
+            <div className="px-6 py-1 text-center border-r border-white/10">
+              <p className={`text-[10px] uppercase font-black tracking-widest ${timerData.mode === 'work' ? 'text-blue-400' : 'text-green-400'}`}>
+                {timerData.mode === 'work' ? 'Focus' : 'Break'}
+              </p>
+              <h2 className="text-2xl font-mono font-bold leading-none tabular-nums">
+                {Math.floor(timerData.timeLeft / 60)}:{String(timerData.timeLeft % 60).padStart(2, "0")}
+              </h2>
+            </div>
+            {isHost && (
+              <div className="flex gap-1 px-2">
+                <button 
+                  onClick={() => updateDoc(roomRef, { "timer.isRunning": !timerData.isRunning })}
+                  className="p-2 hover:bg-white/10 rounded-lg text-blue-400 transition"
+                >
+                  {timerData.isRunning ? <FaPause size={14}/> : <FaPlay size={14}/>}
+                </button>
+                <button 
+                  onClick={() => updateDoc(roomRef, { "timer.timeLeft": timerData.mode === 'work' ? 1500 : 300, "timer.isRunning": false })}
+                  className="p-2 hover:bg-white/10 rounded-lg text-gray-400 transition"
+                >
+                  <FaUndo size={12}/>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="flex-1 bg-gray-950 p-4 overflow-auto">
@@ -243,7 +331,6 @@ export default function StudyBuddyRoom({ room, user, onBack }) {
                 </div>
               )}
             </div>
-
             {buddies.filter(b => b.uid !== user.uid).map((buddy) => (
               <RemoteVideo key={buddy.uid} buddy={buddy} stream={remoteStreams[buddy.uid]} />
             ))}
@@ -258,8 +345,23 @@ export default function StudyBuddyRoom({ room, user, onBack }) {
       </div>
 
       {showChat && (
-        <div className="w-80 bg-gray-800 flex flex-col border-l border-gray-700">
-          <div className="px-4 py-3 border-b border-gray-700 flex justify-between items-center"><h3 className="font-semibold text-lg">Chat</h3><button onClick={() => setShowChat(false)}>✕</button></div>
+        <div className="w-80 bg-gray-800 flex flex-col border-l border-gray-700 relative z-10">
+          <div className="px-4 py-3 border-b border-gray-700 flex justify-between items-center">
+            <h3 className="font-semibold text-lg">Chat</h3>
+            <button onClick={() => setShowChat(false)}>✕</button>
+          </div>
+
+          {spamWarnings > 0 && (
+            <div className={`mx-4 mt-3 px-3 py-2 rounded-lg border flex items-center gap-3 transition-all animate-pulse ${
+              spamWarnings === 1 ? 'bg-yellow-500/10 border-yellow-500/50 text-yellow-500' : 'bg-red-500/10 border-red-500/50 text-red-500'
+            }`}>
+              <FaExclamationTriangle className="flex-shrink-0" />
+              <div className="text-xs font-bold uppercase tracking-wider">
+                Warnings: {spamWarnings} / 3
+              </div>
+            </div>
+          )}
+
           <div className="flex-1 overflow-y-auto p-4 space-y-3">
             {messages.map((msg) => (
               <div key={msg.id} className={`flex ${msg.senderId === user.uid ? 'justify-end' : 'justify-start'}`}>
@@ -284,12 +386,10 @@ export default function StudyBuddyRoom({ room, user, onBack }) {
 
 function RemoteVideo({ buddy, stream }) {
   const videoRef = useRef();
-
   useEffect(() => {
     const video = videoRef.current;
     if (video && stream) {
       video.srcObject = stream;
-      // Force play because some browsers block auto-play until explicitly told
       video.onloadedmetadata = () => {
         video.play().catch(e => console.error("Auto-play failed:", e));
       };
@@ -298,13 +398,7 @@ function RemoteVideo({ buddy, stream }) {
 
   return (
     <div className="relative bg-gray-800 rounded-xl overflow-hidden shadow-lg aspect-video">
-      {/* Video is always rendered but visible only when stream exists */}
-      <video 
-        ref={videoRef} 
-        autoPlay 
-        playsInline 
-        className={`w-full h-full object-cover ${!stream ? 'hidden' : 'block'}`} 
-      />
+      <video ref={videoRef} autoPlay playsInline className={`w-full h-full object-cover ${!stream ? 'hidden' : 'block'}`} />
       {!stream && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900">
           <div className="w-16 h-16 rounded-full bg-gray-700 flex items-center justify-center text-2xl font-bold mb-2 animate-pulse">{buddy.username?.charAt(0).toUpperCase()}</div>
