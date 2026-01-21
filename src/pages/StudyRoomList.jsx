@@ -1,18 +1,44 @@
 // src/pages/StudyRoomList.jsx
 import { useEffect, useState } from "react";
 import { db } from "../firebase";
-import { FaPlus, FaLayerGroup, FaSignOutAlt, FaUser, FaVideo } from "react-icons/fa";
+import { 
+  FaPlus, FaLayerGroup, FaSignOutAlt, FaUser, FaVideo, 
+  FaEye, FaLock, FaCrown, FaDoorOpen, FaTimes 
+} from "react-icons/fa";
 import CreateRoom from "./CreateRoom";
 import { addDoc, collection, onSnapshot, query, orderBy, serverTimestamp } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
+
+// --- REUSABLE NAVBAR ICON BUTTON ---
+const NavIconButton = ({ onClick, icon, label, active = false }) => {
+  return (
+    <div className="relative group z-50">
+      <button
+        onClick={onClick}
+        className={`p-3.5 rounded-xl transition-all duration-300 transform hover:scale-105 shadow-md border 
+        ${active 
+          ? "bg-gradient-to-r from-blue-600 to-purple-600 text-white border-transparent shadow-blue-500/30" 
+          : "bg-white text-gray-500 border-white hover:text-blue-600 hover:shadow-lg"
+        }`}
+      >
+        <div className="text-lg">{icon}</div>
+      </button>
+      
+      {/* Tooltip */}
+      <div className="absolute top-16 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-white text-gray-600 text-[10px] font-bold uppercase tracking-wider rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-all duration-200 pointer-events-none whitespace-nowrap border border-gray-100 translate-y-2 group-hover:translate-y-0">
+        {label}
+        {/* Little arrow pointing up */}
+        <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-white rotate-45 border-t border-l border-gray-100"></div>
+      </div>
+    </div>
+  );
+};
 
 export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProfile, onCreateRoom, onOpenStudyBuddyRoom }) {
   const [rooms, setRooms] = useState([]);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [showMyRooms, setShowMyRooms] = useState(false);
   const [showCreateRoom, setShowCreateRoom] = useState(false);
-  
-  // NEW: State to track active cooldowns locally
   const [cooldowns, setCooldowns] = useState({});
 
   const auth = getAuth();
@@ -25,11 +51,10 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
       const fetchedRooms = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
       setRooms(fetchedRooms);
     });
-    
     return () => unsubscribe();
   }, []);
 
-  // NEW: Effect to manage the cooldown countdowns
+  // Cooldown timer management
   useEffect(() => {
     const timer = setInterval(() => {
       const newCooldowns = {};
@@ -37,16 +62,12 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
         const cooldownUntil = localStorage.getItem(`cooldown_${room.id}`);
         if (cooldownUntil) {
           const timeLeft = Math.ceil((parseInt(cooldownUntil) - Date.now()) / 1000);
-          if (timeLeft > 0) {
-            newCooldowns[room.id] = timeLeft;
-          } else {
-            localStorage.removeItem(`cooldown_${room.id}`);
-          }
+          if (timeLeft > 0) newCooldowns[room.id] = timeLeft;
+          else localStorage.removeItem(`cooldown_${room.id}`);
         }
       });
       setCooldowns(newCooldowns);
     }, 1000);
-
     return () => clearInterval(timer);
   }, [rooms]);
 
@@ -58,81 +79,82 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
     return room.createdBy === currentUserId;
   });
 
-  const userCreatedRooms = rooms.filter(room => room.createdBy === currentUserId);
-
-  const handleStudyBuddyClick = () => {
-    onOpenStudyBuddyRoom();
-  };
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-blue-50">
-      {/* Top Navbar */}
-      <nav className="fixed w-full bg-white/95 backdrop-blur-sm shadow-lg z-50">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
-          <div className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent cursor-pointer">
+    <div className="min-h-screen relative bg-gray-50 font-sans overflow-hidden">
+      
+      {/* --- BACKGROUND ELEMENTS (Matches Home.jsx) --- */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 opacity-60"></div>
+        <div className="absolute top-[-10%] right-[-5%] w-[500px] h-[500px] bg-purple-200/40 rounded-full blur-3xl animate-float-slow"></div>
+        <div className="absolute bottom-[-10%] left-[-10%] w-[600px] h-[600px] bg-blue-200/40 rounded-full blur-3xl animate-float"></div>
+        {/* Grid Pattern */}
+        <div className="absolute inset-0" style={{ 
+          backgroundImage: 'linear-gradient(rgba(0,0,0,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.03) 1px, transparent 1px)', 
+          backgroundSize: '40px 40px' 
+        }}></div>
+      </div>
+
+      {/* Navbar */}
+      <nav className="fixed w-full bg-white/70 backdrop-blur-xl border-b border-white/50 shadow-sm z-50 transition-all">
+        <div className="max-w-7xl mx-auto px-6 py-3 flex justify-between items-center">
+          {/* Logo */}
+          <div className="text-2xl font-black bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent cursor-pointer tracking-tight">
             FocusHub
           </div>
 
-          <div className="flex items-center gap-4">
+          {/* Icon Controls */}
+          <div className="flex items-center gap-3">
             {rooms.length > 0 && (
-              <button
-                onClick={handleStudyBuddyClick}
-                className="flex items-center gap-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white px-4 py-2 rounded-lg hover:from-blue-600 hover:to-purple-700 transition transform hover:scale-105 shadow-md font-medium"
-              >
-                <FaVideo /> Study Buddy
-              </button>
+              <NavIconButton 
+                onClick={onOpenStudyBuddyRoom} 
+                icon={<FaVideo />} 
+                label="Study Buddy Mode" 
+              />
             )}
 
-            <button
-              onClick={() => setShowCreateRoom(true)}
-              className="flex items-center gap-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white px-4 py-2 rounded-lg hover:from-blue-600 hover:to-purple-700 transition transform hover:scale-105 shadow-md font-medium"
-            >
-              <FaPlus /> Create Room
-            </button>
+            <NavIconButton 
+              onClick={() => setShowCreateRoom(true)} 
+              icon={<FaPlus />} 
+              label="Create Room" 
+            />
 
-            <button
-              onClick={() => setShowMyRooms(!showMyRooms)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition transform hover:scale-105 shadow-md ${
-                showMyRooms
-                  ? "bg-gradient-to-r from-purple-500 to-pink-600 text-white"
-                  : "bg-white text-gray-700 border-2 border-gray-300 hover:border-purple-500"
-              }`}
-            >
-              <FaLayerGroup /> {showMyRooms ? "All Rooms" : "My Rooms"}
-            </button>
+            <NavIconButton 
+              onClick={() => setShowMyRooms(!showMyRooms)} 
+              icon={<FaLayerGroup />} 
+              label={showMyRooms ? "Show All Rooms" : "Show My Rooms"}
+              active={showMyRooms}
+            />
 
-            <div className="relative">
-              <div
-                className="flex items-center gap-3 cursor-pointer bg-white border-2 border-gray-300 px-4 py-2 rounded-lg hover:border-blue-500 transition"
+            {/* Profile Dropdown */}
+            <div className="relative ml-2">
+              <button
+                className="w-11 h-11 rounded-full p-0.5 border-2 border-transparent hover:border-blue-400 transition-all transform hover:scale-105 shadow-sm"
                 onClick={() => setIsDropdownOpen(!isDropdownOpen)}
               >
                 <img
                   src={user?.photoBase64 || "/src/assets/default-avatar.png"}
                   alt="Profile"
-                  className="w-8 h-8 rounded-full object-cover"
+                  className="w-full h-full rounded-full object-cover bg-white"
                 />
-                <span className="font-medium text-gray-700">{username}</span>
-              </div>
+              </button>
               
               {isDropdownOpen && (
-                <div className="absolute right-0 mt-2 w-56 bg-white shadow-2xl rounded-xl overflow-hidden border border-gray-100 animate-slideDown">
+                <div className="absolute right-0 mt-3 w-64 bg-white/95 backdrop-blur-xl shadow-2xl rounded-2xl overflow-hidden border border-white/50 animate-slideDown origin-top-right">
+                  <div className="px-5 py-4 bg-gradient-to-r from-blue-50 to-purple-50 border-b border-gray-100">
+                    <p className="text-sm font-bold text-gray-800 truncate">{username}</p>
+                    <p className="text-xs text-gray-500 truncate font-medium">{user?.email}</p>
+                  </div>
                   <button
-                    onClick={() => {
-                      onEditProfile();
-                      setIsDropdownOpen(false);
-                    }}
-                    className="flex items-center gap-3 w-full text-left px-4 py-3 hover:bg-gradient-to-r hover:from-blue-50 hover:to-purple-50 transition"
+                    onClick={() => { onEditProfile(); setIsDropdownOpen(false); }}
+                    className="flex items-center gap-3 w-full text-left px-5 py-3 hover:bg-gray-50 text-gray-600 hover:text-blue-600 transition text-sm font-medium"
                   >
-                    <FaUser className="text-blue-600" /> Edit Profile
+                    <FaUser className="text-lg" /> Edit Profile
                   </button>
                   <button
-                    onClick={() => {
-                      onLogout();
-                      setIsDropdownOpen(false);
-                    }}
-                    className="flex items-center gap-3 w-full text-left px-4 py-3 hover:bg-red-50 text-red-600 transition border-t"
+                    onClick={() => { onLogout(); setIsDropdownOpen(false); }}
+                    className="flex items-center gap-3 w-full text-left px-5 py-3 hover:bg-red-50 text-red-500 hover:text-red-600 transition border-t border-gray-100 text-sm font-medium"
                   >
-                    <FaSignOutAlt /> Logout
+                    <FaSignOutAlt className="text-lg" /> Logout
                   </button>
                 </div>
               )}
@@ -142,35 +164,37 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
       </nav>
 
       {/* Main Content */}
-      <div className="pt-24 px-6 pb-12">
+      <div className="relative pt-28 px-6 pb-12 z-10">
         <div className="max-w-7xl mx-auto">
-          <div className="mb-8">
-            <h1 className="text-4xl font-bold mb-2 bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
-              {showMyRooms ? "My Study Rooms" : "Study Rooms"}
+          <div className="mb-10 text-center md:text-left">
+            <h1 className="text-4xl md:text-5xl font-extrabold mb-3 text-gray-800 tracking-tight">
+              {showMyRooms ? "My Rooms" : "Live Sessions"}
             </h1>
-            <p className="text-gray-600">
+            <p className="text-lg text-gray-500 font-medium max-w-2xl">
               {showMyRooms
-                ? `You have created ${filteredRooms.length} room${filteredRooms.length !== 1 ? 's' : ''}`
-                : `Join ${rooms.length} live study session${rooms.length !== 1 ? 's' : ''} and boost your productivity`}
+                ? `You have created ${filteredRooms.length} active room${filteredRooms.length !== 1 ? 's' : ''}.`
+                : `Join ${rooms.length} active study room${rooms.length !== 1 ? 's' : ''} and boost your productivity.`}
             </p>
           </div>
 
           {filteredRooms.length === 0 ? (
-            <div className="text-center py-20">
-              <div className="text-6xl mb-4">📚</div>
+            <div className="text-center py-24 bg-white/40 backdrop-blur-sm rounded-[2rem] border border-white shadow-xl">
+              <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center mx-auto mb-6 shadow-md text-4xl text-blue-200">
+                <FaLayerGroup />
+              </div>
               <h3 className="text-2xl font-bold text-gray-700 mb-2">
                 {showMyRooms ? "No rooms created yet" : "No study rooms available"}
               </h3>
-              <p className="text-gray-500 mb-6">
+              <p className="text-gray-500 mb-8 max-w-md mx-auto">
                 {showMyRooms
-                  ? "Create your first study room and start learning!"
-                  : "Be the first to create a study room!"}
+                  ? "Create your own space to study with friends or invite others to join you."
+                  : "The library is empty! Be the first to open a study room."}
               </p>
               <button
                 onClick={() => setShowCreateRoom(true)}
-                className="bg-gradient-to-r from-blue-500 to-purple-600 text-white px-6 py-3 rounded-lg hover:from-blue-600 hover:to-purple-700 transition transform hover:scale-105 shadow-lg font-medium"
+                className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-3.5 rounded-2xl hover:shadow-lg hover:shadow-blue-500/30 transition transform hover:scale-105 font-bold flex items-center gap-2 mx-auto"
               >
-                Create Study Room
+                <FaPlus /> Create Room
               </button>
             </div>
           ) : (
@@ -178,77 +202,92 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
               {filteredRooms.map(room => (
                 <div
                   key={room.id}
-                  className="bg-white rounded-2xl shadow-lg overflow-hidden hover:shadow-2xl transform hover:-translate-y-2 transition-all duration-300 border-t-4 border-blue-500 cursor-pointer"
+                  className="bg-white rounded-[2rem] shadow-lg shadow-gray-200/50 hover:shadow-2xl hover:shadow-blue-500/10 transition-all duration-300 group cursor-pointer border border-gray-100 overflow-hidden flex flex-col hover:-translate-y-2"
                   onClick={() => !cooldowns[room.id] && onSelectRoom(room)}
                 >
-                  <div className="relative h-48 bg-gray-200 overflow-hidden">
+                  {/* Thumbnail Section */}
+                  <div className="relative h-56 bg-gray-100 overflow-hidden">
                     {room.liveThumbnail ? (
                       <img 
                         src={room.liveThumbnail} 
                         alt="Live Preview" 
                         loading="eager"
-                        className="room-thumbnail-img animate-fadeIn"
+                        className="room-thumbnail-img"
                       />
                     ) : (
                       <video
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity"
                         src={room.previewURL || "/src/assets/girlstudy.mp4"}
-                        autoPlay
-                        muted
-                        loop
+                        autoPlay muted loop
                       />
                     )}
                     
-                    <div className="absolute top-3 left-3 flex items-center gap-2 bg-red-600 text-white px-3 py-1 rounded-full text-xs font-bold shadow-lg z-10">
-                      <span className="w-2 h-2 bg-white rounded-full animate-pulse"></span>
-                      {room.isLive ? "LIVE" : "OFFLINE"}
+                    {/* Live Badge */}
+                    <div className="absolute top-4 left-4 flex items-center gap-2 bg-white/90 backdrop-blur-md text-gray-800 px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider shadow-sm">
+                      <span className={`w-2 h-2 rounded-full ${room.isLive ? 'bg-red-500 animate-pulse' : 'bg-gray-400'}`}></span>
+                      {room.isLive ? "Live" : "Offline"}
                     </div>
                     
-                    <div className="absolute top-3 right-3 bg-black/50 backdrop-blur-sm text-white px-3 py-1 rounded-full text-sm font-semibold z-10">
-                      👀 {Math.floor(Math.random() * 150 + 30)}
+                    {/* Viewers Badge */}
+                    <div className="absolute top-4 right-4 bg-white/90 backdrop-blur-md text-gray-800 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm">
+                      <FaEye className="text-blue-500" /> {Math.floor(Math.random() * 150 + 30)}
                     </div>
                     
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent"></div>
+                    {/* Gradient Overlay for Text Readability */}
+                    <div className="absolute inset-0 bg-gradient-to-t from-gray-900/60 via-transparent to-transparent"></div>
                     
-                    <div className="absolute bottom-3 left-3 right-3 z-10">
-                      <h3 className="text-white font-bold text-xl drop-shadow-lg">
+                    {/* Title on Image */}
+                    <div className="absolute bottom-5 left-5 right-5">
+                      <h3 className="text-white font-bold text-2xl drop-shadow-md truncate leading-tight">
                         {room.name}
                       </h3>
                     </div>
                   </div>
 
-                  <div className="p-6">
-                    <p className="text-gray-600 text-sm mb-4 line-clamp-2 min-h-[40px]">
-                      {room.description || "Join this study room and focus together!"}
-                    </p>
-                    
-                    {room.createdBy === currentUserId && (
-                      <div className="mb-3 flex items-center gap-2">
-                        <span className="inline-block bg-gradient-to-r from-purple-100 to-pink-100 text-purple-700 px-3 py-1 rounded-full text-xs font-semibold">
-                          👑 Your Room
-                        </span>
-                        {room.isPrivate && (
-                          <span className="inline-block bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs font-semibold">
-                            🔒 Private
+                  {/* Content Section */}
+                  <div className="p-6 flex-1 flex flex-col justify-between bg-white">
+                    <div>
+                      {/* Tags */}
+                      <div className="flex flex-wrap gap-2 mb-4">
+                        {room.createdBy === currentUserId && (
+                          <span className="flex items-center gap-1 bg-gradient-to-r from-yellow-50 to-orange-50 text-orange-600 border border-orange-100 px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wide">
+                            <FaCrown /> Owner
+                          </span>
+                        )}
+                        {room.isPrivate ? (
+                          <span className="flex items-center gap-1 bg-red-50 text-red-600 border border-red-100 px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wide">
+                            <FaLock /> Private
+                          </span>
+                        ) : (
+                           <span className="flex items-center gap-1 bg-green-50 text-green-600 border border-green-100 px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wide">
+                            <FaDoorOpen /> Public
                           </span>
                         )}
                       </div>
-                    )}
 
-                    {/* UPDATED BUTTON: Disables and shows countdown if on cooldown */}
+                      <p className="text-gray-500 text-sm line-clamp-2 mb-6 h-10 leading-relaxed">
+                        {room.description || "Join this study room and focus together with peers!"}
+                      </p>
+                    </div>
+
+                    {/* Action Button (Matches Home/Login gradient) */}
                     <button
                       disabled={!!cooldowns[room.id]}
                       onClick={(e) => {
                         e.stopPropagation();
                         onSelectRoom(room);
                       }}
-                      className={`w-full py-3 rounded-lg font-semibold transition transform shadow-md ${
+                      className={`w-full py-3.5 rounded-xl font-bold text-sm transition-all shadow-lg flex items-center justify-center gap-2 group-hover:translate-y-0 ${
                         cooldowns[room.id] 
-                        ? "bg-gray-400 cursor-not-allowed text-white scale-100" 
-                        : "bg-gradient-to-r from-blue-500 to-purple-600 text-white hover:from-blue-600 hover:to-purple-700 hover:scale-105"
+                        ? "bg-gray-100 text-gray-400 cursor-not-allowed border border-gray-200 shadow-none" 
+                        : "bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:shadow-blue-500/30 transform active:scale-95"
                       }`}
                     >
-                      {cooldowns[room.id] ? `Cooldown (${cooldowns[room.id]}s)` : "Join Room"}
+                      {cooldowns[room.id] ? (
+                        <>Cooldown ({cooldowns[room.id]}s)</>
+                      ) : (
+                        <>Join Room <FaDoorOpen /></>
+                      )}
                     </button>
                   </div>
                 </div>
@@ -260,13 +299,13 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
 
       {/* Create Room Modal */}
       {showCreateRoom && (
-        <div className="fixed inset-0 flex items-center justify-center z-50 bg-black/60 backdrop-blur-sm">
-          <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-md relative animate-slideUp">
+        <div className="fixed inset-0 flex items-center justify-center z-50 bg-black/40 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="bg-white p-8 rounded-[2rem] shadow-2xl w-full max-w-md relative animate-slideUp border border-white/50">
             <button
-              className="absolute top-4 right-4 text-gray-400 hover:text-gray-800 font-bold text-2xl transition"
+              className="absolute top-5 right-5 text-gray-400 hover:text-gray-800 transition p-2 hover:bg-gray-100 rounded-full"
               onClick={() => setShowCreateRoom(false)}
             >
-              ✕
+              <FaTimes size={20} />
             </button>
             <CreateRoom
               onCancel={() => setShowCreateRoom(false)}
@@ -275,7 +314,8 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                   alert("You must be logged in to create a room.");
                   return;
                 }
-
+                
+                // 1. Create Room Object
                 const newRoom = {
                   ...roomData,
                   createdBy: firebaseUser.uid,
@@ -285,8 +325,12 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                   liveThumbnail: null
                 };
 
-                await addDoc(collection(db, "studyRooms"), newRoom);
+                // 2. Add to Firestore
+                const docRef = await addDoc(collection(db, "studyRooms"), newRoom);
+                
+                // 3. Auto-Join (Trigger onSelectRoom immediately)
                 setShowCreateRoom(false);
+                onSelectRoom({ id: docRef.id, ...newRoom });
               }}
             />
           </div>
@@ -295,55 +339,23 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
 
       <style>
         {`
-          .animate-slideDown { animation: slideDown 0.2s ease-out; }
-          @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-          }
-
-          .animate-slideUp { animation: slideUp 0.3s ease-out; }
-          @keyframes slideUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-          }
-
-          .animate-fadeIn { 
-            animation: fastFade 0.4s ease-in-out; 
-            backface-visibility: hidden;
-          }
+          .animate-slideDown { animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+          @keyframes slideDown { from { opacity: 0; transform: translateY(-10px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
           
-          @keyframes fastFade {
-            0% { opacity: 0.7; filter: contrast(1.1); }
-            100% { opacity: 1; filter: contrast(1); }
-          }
+          .animate-slideUp { animation: slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+          @keyframes slideUp { from { opacity: 0; transform: translateY(30px); } to { opacity: 1; transform: translateY(0); } }
+          
+          .animate-fadeIn { animation: fadeIn 0.3s ease-out; }
+          @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
-          .room-thumbnail-img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            image-rendering: -webkit-optimize-contrast; 
-            transition: opacity 0.2s ease-in-out;
-            background-color: #000;
-            animation: subtleShake 4s ease-in-out infinite alternate;
-          }
+          .animate-float { animation: float 10s ease-in-out infinite; }
+          .animate-float-slow { animation: float 15s ease-in-out infinite; }
+          @keyframes float { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(20px, -20px); } }
 
-          @keyframes subtleShake {
-            0% { transform: scale(1.02) translateX(0); }
-            100% { transform: scale(1.05) translateX(1px); }
-          }
-
-          .line-clamp-2 {
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-          }
-
-          @keyframes pulse {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.7; transform: scale(0.98); }
-          }
-          .animate-pulse { animation: pulse 2s infinite; }
+          .room-thumbnail-img { width: 100%; height: 100%; object-fit: cover; animation: subtleShake 4s ease-in-out infinite alternate; background-color: #f3f4f6; }
+          @keyframes subtleShake { 0% { transform: scale(1.02); } 100% { transform: scale(1.05); } }
+          
+          .line-clamp-2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
         `}
       </style>
     </div>
