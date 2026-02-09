@@ -11,7 +11,8 @@ import {
   FaBroadcastTower, FaStopCircle, FaPowerOff, FaPaperPlane,
   FaStopwatch, FaCoffee, FaCheck, FaThumbsUp, FaHeart, FaBolt, 
   FaExclamationTriangle, FaPaperclip, FaLink, FaExternalLinkAlt, 
-  FaTimes, FaPlus, FaCloudUploadAlt, FaFilePdf, FaImage, FaDownload, FaDesktop
+  FaTimes, FaPlus, FaCloudUploadAlt, FaFilePdf, FaImage, FaDownload, 
+  FaDesktop, FaTrash, FaCheckCircle, FaClock, FaInfoCircle
 } from "react-icons/fa";
 const Peer = window.SimplePeer;
 import { useAuthState } from "react-firebase-hooks/auth";
@@ -20,25 +21,54 @@ const dingSound = new Audio("https://actions.google.com/sounds/v1/alarms/beep_sh
 const alertSound = new Audio("https://actions.google.com/sounds/v1/alarms/mechanical_clock_ring.ogg");
 alertSound.loop = true;
 
-// --- 1. MODAL COMPONENT (Timer) ---
+// --- 1. TOAST COMPONENT (Frontend Notifications) ---
+const Toast = ({ message, type, onClose }) => {
+  useEffect(() => {
+    const timer = setTimeout(onClose, 3000); // Auto close after 3s
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  const bg = type === "error" ? "bg-red-500" : type === "success" ? "bg-green-500" : "bg-blue-500";
+
+  return (
+    <div className={`fixed top-24 left-1/2 transform -translate-x-1/2 z-[300] ${bg} text-white px-6 py-3 rounded-full shadow-xl flex items-center gap-3 animate-slideDown border border-white/10`}>
+      {type === "error" ? <FaExclamationTriangle /> : (type === "success" ? <FaCheckCircle /> : <FaInfoCircle />)}
+      <span className="text-sm font-semibold tracking-wide">{message}</span>
+      <button onClick={onClose} className="ml-2 hover:text-white/80"><FaTimes /></button>
+    </div>
+  );
+};
+
+// --- 2. CONFIRM MODAL (Frontend Dialog) ---
+const ConfirmModal = ({ title, message, onConfirm, onCancel }) => (
+  <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
+    <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center border border-gray-200">
+      <div className="w-12 h-12 bg-red-100 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4 text-xl">
+        <FaExclamationTriangle />
+      </div>
+      <h3 className="text-lg font-bold text-gray-800 mb-2">{title}</h3>
+      <p className="text-gray-500 text-sm mb-6">{message}</p>
+      <div className="flex gap-3">
+        <button onClick={onCancel} className="flex-1 py-2.5 rounded-xl border border-gray-300 text-gray-700 font-bold hover:bg-gray-50 transition text-sm">Cancel</button>
+        <button onClick={onConfirm} className="flex-1 py-2.5 rounded-xl bg-red-600 text-white font-bold hover:bg-red-700 shadow-lg shadow-red-200 transition text-sm">Confirm</button>
+      </div>
+    </div>
+  </div>
+);
+
+// --- 3. TIMER SETUP MODAL ---
 const TimerSetupModal = ({ onClose, onSave, isStreamLive }) => {
   const [w, setW] = useState(25);
   const [b, setB] = useState(5);
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center z-[100] bg-black/60 backdrop-blur-md animate-fadeIn">
+    <div className="fixed inset-0 flex items-center justify-center z-[200] bg-black/60 backdrop-blur-md animate-fadeIn">
       <div className="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/20 relative">
         <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-800"><FaCheck /></button>
         <div className="text-center mb-6">
-          <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4 text-blue-600 text-3xl">
-            <FaStopwatch />
-          </div>
+          <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4 text-blue-600 text-3xl"><FaStopwatch /></div>
           <h2 className="text-2xl font-bold text-gray-800">Set Pomodoro</h2>
-          <p className="text-gray-500 text-sm mt-1">
-            {isStreamLive 
-              ? "Session is live. Timer starts immediately." 
-              : "Settings saved. Timer starts when you Go Live."}
-          </p>
+          <p className="text-gray-500 text-sm mt-1">{isStreamLive ? "Timer starts immediately." : "Timer starts when you Go Live."}</p>
         </div>
         <div className="space-y-4">
           <div>
@@ -49,12 +79,7 @@ const TimerSetupModal = ({ onClose, onSave, isStreamLive }) => {
             <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Break (Minutes)</label>
             <input type="number" value={b} onChange={e => setB(Number(e.target.value))} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500 outline-none font-mono text-lg" />
           </div>
-          <button 
-            onClick={() => onSave(w, b)} 
-            className={`w-full text-white py-3 rounded-xl font-bold hover:shadow-lg transition-transform active:scale-95 ${
-              isStreamLive ? "bg-gradient-to-r from-blue-600 to-purple-600" : "bg-gray-800"
-            }`}
-          >
+          <button onClick={() => onSave(w, b)} className={`w-full text-white py-3 rounded-xl font-bold hover:shadow-lg transition-transform active:scale-95 ${isStreamLive ? "bg-gradient-to-r from-blue-600 to-purple-600" : "bg-gray-800"}`}>
             {isStreamLive ? "Start Timer Now" : "Save Configuration"}
           </button>
         </div>
@@ -63,7 +88,7 @@ const TimerSetupModal = ({ onClose, onSave, isStreamLive }) => {
   );
 };
 
-// --- REUSABLE CONTROL BUTTON ---
+// --- 4. CONTROL BUTTON ---
 const ControlButton = ({ onClick, icon, label, variant = "default", disabled = false, active = false }) => {
   const variants = {
     default: "bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10",
@@ -77,11 +102,7 @@ const ControlButton = ({ onClick, icon, label, variant = "default", disabled = f
 
   return (
     <div className="relative group">
-      <button
-        onClick={onClick}
-        disabled={disabled}
-        className={`p-4 rounded-2xl shadow-lg transition-all transform hover:scale-105 active:scale-95 ${disabled ? variants.locked : (active ? variants.active : variants[variant])}`}
-      >
+      <button onClick={onClick} disabled={disabled} className={`p-4 rounded-2xl shadow-lg transition-all transform hover:scale-105 active:scale-95 ${disabled ? variants.locked : (active ? variants.active : variants[variant])}`}>
         <div className="text-xl">{icon}</div>
       </button>
       {!disabled && (
@@ -96,9 +117,12 @@ const ControlButton = ({ onClick, icon, label, variant = "default", disabled = f
 
 export default function RoomMessages({ room, onBack }) {
   const [user] = useAuthState(auth);
+  // Safe check
+  if (!user || !room) return <div className="h-screen flex items-center justify-center text-white bg-gray-900">Loading...</div>;
+
   const isHost = room?.createdBy === user?.uid || room?.isHost;
 
-  // State
+  // --- STATE ---
   const [messages, setMessages] = useState([]);
   const [newMsg, setNewMsg] = useState("");
   const [viewers, setViewers] = useState(Math.floor(Math.random() * 150 + 30));
@@ -109,7 +133,7 @@ export default function RoomMessages({ room, onBack }) {
   const [showChat, setShowChat] = useState(true);
   const [showFiles, setShowFiles] = useState(false);
   
-  // File/Resource State
+  // Resources State
   const [resources, setResources] = useState([]);
   const [newResourceLink, setNewResourceLink] = useState("");
   const [newResourceName, setNewResourceName] = useState("");
@@ -118,20 +142,19 @@ export default function RoomMessages({ room, onBack }) {
   const [activeResource, setActiveResource] = useState(null); 
   const fileInputRef = useRef(null);
 
-  // Timer State
+  // Timer
   const [timerData, setTimerData] = useState({ 
-    timeLeft: 1500, 
-    isRunning: false, 
-    mode: 'work',
-    config: { work: 25, break: 5 }, 
-    isConfigured: false,
-    autoStart: false
+    timeLeft: 1500, isRunning: false, mode: 'work', config: { work: 25, break: 5 }, isConfigured: false, autoStart: false
   });
   const [showTimerModal, setShowTimerModal] = useState(false);
 
-  // Distraction State
+  // Distraction
   const [distractionCount, setDistractionCount] = useState(0);
   const [showDistractionAlert, setShowDistractionAlert] = useState(false);
+
+  // UI Feedback
+  const [toast, setToast] = useState(null); // { message, type }
+  const [confirmDialog, setConfirmDialog] = useState(null); // { title, message, onConfirm }
 
   // Refs
   const [remoteStreams, setRemoteStreams] = useState({});
@@ -140,28 +163,37 @@ export default function RoomMessages({ room, onBack }) {
   const chatEndRef = useRef(null);
   const peersRef = useRef({});
   const signalingUnsubscribeRef = useRef(null);
-  
   const viewerIdRef = useRef(user ? `${user.uid}_${Date.now()}` : null);
   const roomRef = doc(db, "studyRooms", room.id);
 
-  // ==========================================
-  // 0. DISTRACTION DETECTION (Host & Viewers)
-  // ==========================================
+  // --- HELPERS ---
+  const triggerToast = (msg, type="info") => setToast({ message: msg, type });
+  
+  const triggerConfirm = (title, message, action) => {
+    setConfirmDialog({ 
+      title, 
+      message, 
+      onConfirm: () => { action(); setConfirmDialog(null); },
+      onCancel: () => setConfirmDialog(null)
+    });
+  };
+
+  // --- DISTRACTION DETECTION ---
   useEffect(() => {
-    // Only detect if it's "Work Mode". 
-    // We do NOT check isHost or streamLive here because timerData.mode syncs for everyone.
-    // If work mode is active, everyone should be focusing.
+    // Only detect during WORK mode
     if (timerData.mode !== 'work') {
-      // Cleanup sound if mode changes
       alertSound.pause();
       alertSound.currentTime = 0;
       return;
     }
 
     const handleVisibilityChange = () => {
+      // If stream is NOT live and NOT host, don't nag them
+      if (!streamLive && !isHost) return; 
+
       if (document.hidden) {
         setDistractionCount(prev => prev + 1);
-        console.log("Distraction: Tab Hidden");
+        console.log("Distraction detected: User switched tabs.");
         alertSound.currentTime = 0;
         alertSound.play().catch(e => console.warn(e));
       } else {
@@ -178,52 +210,39 @@ export default function RoomMessages({ room, onBack }) {
       alertSound.pause();
       alertSound.currentTime = 0;
     };
-  }, [timerData.mode]); 
+  }, [timerData.mode, streamLive]); 
 
-
-  // ==========================================
-  // 1. SYNCED PRESENTATION & FILES
-  // ==========================================
-  
-  // Listen for Room Updates (Presentation Mode) & Resources
+  // --- DATA SYNC ---
   useEffect(() => {
     if (!room?.id) return;
     
-    // 1. Room Data (Timer, Presentation)
+    // 1. Room Metadata
     const roomUnsub = onSnapshot(roomRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
         if (data.timer) setTimerData(data.timer);
-        
-        // Sync active resource (Presentation)
-        if (data.activeResource) {
-          setActiveResource(data.activeResource);
-        } else {
-          setActiveResource(null);
-        }
+        if (data.activeResource) setActiveResource(data.activeResource);
+        else setActiveResource(null);
+        if (data.isLive !== undefined) setStreamLive(data.isLive);
       }
     });
 
-    // 2. Resources List
+    // 2. Resources (Files/Links)
     const q = query(collection(db, "room_resources"), where("roomId", "==", room.id), orderBy("createdAt", "desc"));
     const filesUnsub = onSnapshot(q, (snapshot) => {
       setResources(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
 
-    return () => {
-      roomUnsub();
-      filesUnsub();
-    };
+    return () => { roomUnsub(); filesUnsub(); };
   }, [room.id]);
 
-  // FIX: Restore Video Stream when presentation stops
   useEffect(() => {
     if (isHost && !activeResource && localStreamRef.current && localVideoRef.current) {
-      console.log("Restoring Camera Stream after presentation...");
       localVideoRef.current.srcObject = localStreamRef.current;
     }
   }, [activeResource, isHost]);
 
+  // --- HANDLERS ---
   const handlePresentResource = async (resource) => {
     if (!isHost) return;
     await updateDoc(roomRef, { activeResource: resource });
@@ -234,38 +253,93 @@ export default function RoomMessages({ room, onBack }) {
     await updateDoc(roomRef, { activeResource: null });
   };
 
+  // --- APPROVAL & DELETE SYSTEM ---
+  const handleApproveResource = async (resourceId) => {
+    if (!isHost) return;
+    try {
+      await updateDoc(doc(db, "room_resources", resourceId), { approved: true });
+      triggerToast("File Approved!", "success");
+    } catch (err) { triggerToast("Permission Error: Check DB Rules", "error"); }
+  };
+
+  const handleDeleteResource = (resourceId) => {
+    triggerConfirm("Delete Resource?", "This cannot be undone.", async () => {
+      try {
+        await deleteDoc(doc(db, "room_resources", resourceId));
+        if (activeResource && activeResource.id === resourceId) handleStopPresentation();
+        triggerToast("Resource deleted.", "success");
+      } catch (err) { triggerToast("Error deleting resource.", "error"); }
+    });
+  };
+
   const handleAddResource = async (e) => {
     e.preventDefault();
     if (!newResourceLink.trim() || !newResourceName.trim()) return;
     try {
+      // Determine Approval Status: Host = True, Viewer = False
+      const isApproved = isHost ? true : false;
+
       await addDoc(collection(db, "room_resources"), {
-        roomId: room.id, name: newResourceName.trim(), url: newResourceLink.trim(), type: "link", addedBy: user.email.split("@")[0], createdAt: serverTimestamp()
+        roomId: room.id, 
+        name: newResourceName.trim(), 
+        url: newResourceLink.trim(), 
+        type: "link", 
+        addedBy: user.email.split("@")[0], 
+        createdAt: serverTimestamp(), 
+        approved: isApproved
       });
+
+      if (isHost) triggerToast("Link added!", "success");
+      else triggerToast("Link sent for approval!", "info");
+      
       setNewResourceLink(""); setNewResourceName(""); setIsAddingResource(false);
-    } catch (err) { alert("Error: " + err.message); }
+    } catch (err) { 
+        console.error("Link Error:", err);
+        triggerToast("Error adding link. Check console.", "error"); 
+    }
   };
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (file.size > 500 * 1024) { alert("File too large! Max 500KB."); return; }
+    // 500KB safety limit for Base64 in Firestore
+    if (file.size > 500 * 1024) { triggerToast("File too large (>500KB)", "error"); return; }
+    
     setIsUploading(true);
     const reader = new FileReader();
+    
     reader.onload = async () => {
       try {
+        // Determine Approval Status: Host = True, Viewer = False
+        const isApproved = isHost ? true : false;
+
         await addDoc(collection(db, "room_resources"), {
-          roomId: room.id, name: file.name, data: reader.result, type: file.type, size: file.size, addedBy: user.email.split("@")[0], createdAt: serverTimestamp()
+          roomId: room.id, 
+          name: file.name, 
+          data: reader.result, // Storing file data directly
+          type: file.type, 
+          size: file.size, 
+          addedBy: user.email.split("@")[0], 
+          createdAt: serverTimestamp(), 
+          approved: isApproved
         });
-      } catch (err) { alert("Upload failed: " + err.message); } finally { setIsUploading(false); }
+
+        if (isHost) triggerToast("File uploaded!", "success");
+        else triggerToast("File sent for approval!", "info");
+
+      } catch (err) { 
+        console.error("Upload Error:", err);
+        triggerToast("Upload failed. Check permissions.", "error"); 
+      } finally { 
+        setIsUploading(false); 
+      }
     };
     reader.readAsDataURL(file);
   };
 
   const triggerFileInput = () => { if (fileInputRef.current) fileInputRef.current.click(); };
 
-  // ==========================================
-  // 2. TIMER LOGIC (Host Only)
-  // ==========================================
+  // --- TIMER ---
   useEffect(() => {
     let interval = null;
     if (isHost && timerData?.isRunning && timerData?.timeLeft > 0) {
@@ -292,9 +366,7 @@ export default function RoomMessages({ room, onBack }) {
     setShowTimerModal(false);
   };
 
-  // ==========================================
-  // 3. CHAT LOGIC
-  // ==========================================
+  // --- CHAT ---
   useEffect(() => {
     if (!room?.id) return;
     const q = query(collection(db, "messages"), orderBy("createdAt", "asc"));
@@ -309,20 +381,19 @@ export default function RoomMessages({ room, onBack }) {
   const handleSend = async (e) => {
     e.preventDefault();
     if (!newMsg.trim()) return;
-    if (containsSpam(newMsg)) { alert("⚠️ Spam blocked."); setNewMsg(""); return; }
+    if (containsSpam(newMsg)) { triggerToast("Spam detected.", "error"); setNewMsg(""); return; }
     await addDoc(collection(db, "messages"), { roomId: room.id, sender: user.email, text: newMsg.trim(), createdAt: serverTimestamp() });
     setNewMsg("");
   };
 
-  // ==========================================
-  // 4. STREAMING LOGIC
-  // ==========================================
+  // --- STREAMING ---
   const handleStartStream = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: true });
       localStreamRef.current = stream;
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
       setStreamLive(true); setCamOn(true); setMicOn(true);
+      await updateDoc(roomRef, { isLive: true });
       if (timerData.autoStart) { await updateDoc(roomRef, { "timer.isRunning": true, "timer.isConfigured": true, "timer.autoStart": false }); } 
       else if (!timerData.isConfigured) { await updateDoc(roomRef, { "timer.isConfigured": false }); }
 
@@ -347,7 +418,7 @@ export default function RoomMessages({ room, onBack }) {
           } catch (err) {}
         }
       });
-    } catch (err) { alert(`Failed: ${err.message}`); }
+    } catch (err) { triggerToast(`Camera Error: ${err.message}`, "error"); }
   };
 
   const handleStopStream = async () => {
@@ -356,24 +427,19 @@ export default function RoomMessages({ room, onBack }) {
      peersRef.current = {};
      if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(t => t.stop()); localStreamRef.current = null; }
      if (signalingUnsubscribeRef.current) signalingUnsubscribeRef.current();
-     
-     // RESET everything on stop
      await updateDoc(roomRef, { 
-       isLive: false,
-       liveThumbnail: null,
-       activeResource: null, // Clear presentation
-       "timer.isRunning": false, 
-       "timer.isConfigured": false, 
-       "timer.timeLeft": 1500, 
-       "timer.mode": 'work' 
+       isLive: false, liveThumbnail: null, activeResource: null,
+       "timer.isRunning": false, "timer.isConfigured": false, "timer.timeLeft": 1500, "timer.mode": 'work' 
      });
   };
 
-  const handleEndRoom = async () => {
-    if (!confirm("End room?")) return;
-    await handleStopStream();
-    await deleteDoc(doc(db, "studyRooms", room.id));
-    onBack();
+  const handleEndRoom = () => {
+    triggerConfirm("End Room?", "This will close the session for everyone.", async () => {
+        await handleStopStream();
+        await deleteDoc(doc(db, "studyRooms", room.id));
+        onBack();
+        setConfirmDialog({ ...confirmDialog, show: false });
+    });
   };
 
   useEffect(() => {
@@ -409,7 +475,7 @@ export default function RoomMessages({ room, onBack }) {
     if (track) { track.enabled = !track.enabled; setMicOn(track.enabled); }
   };
 
-  // --- THUMBNAIL SYNC (Clean Up) ---
+  // --- THUMBNAIL ---
   useEffect(() => {
     let interval = null;
     if (isHost && streamLive && localVideoRef.current && timerData.mode === 'work') {
@@ -424,7 +490,9 @@ export default function RoomMessages({ room, onBack }) {
           await updateDoc(roomRef, { liveThumbnail: thumbnailData, isLive: true });
         } catch (err) {}
       }, 1500);
-    } 
+    } else if (isHost && !streamLive) {
+      updateDoc(roomRef, { liveThumbnail: null, isLive: false }).catch(()=>{});
+    }
     return () => clearInterval(interval);
   }, [isHost, streamLive, timerData.mode]);
 
@@ -447,7 +515,7 @@ export default function RoomMessages({ room, onBack }) {
     try { await addDoc(collection(db, "reactions"), { roomId: room.id, emoji, timestamp: serverTimestamp(), senderId: user?.uid || "guest" }); } catch (err) {}
   };
 
-  // --- UI COMPONENTS ---
+  // --- UI HELPERS ---
   const BreakOverlay = () => {
     if (timerData.mode !== 'break') return null;
     return (
@@ -476,48 +544,32 @@ export default function RoomMessages({ room, onBack }) {
     else { setShowChat(false); setShowFiles(true); }
   };
 
-  if (!user) return <div className="h-screen flex items-center justify-center text-white">Loading...</div>;
-
   return (
     <div className="flex h-screen bg-gray-950 overflow-hidden font-sans">
       <div className="flex-1 relative bg-black">
-        {/* PRESENTATION MODE CHECK */}
+        {/* MODALS & ALERTS */}
+        {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+        {confirmDialog && <ConfirmModal title={confirmDialog.title} message={confirmDialog.message} onConfirm={confirmDialog.onConfirm} onCancel={confirmDialog.onCancel} />}
+        
+        {/* VIDEO / PRESENTATION */}
         {activeResource ? (
           <div className="w-full h-full flex flex-col bg-gray-900">
-            {/* Header for Presentation */}
             <div className="h-12 bg-black/50 backdrop-blur flex items-center justify-between px-6 text-white border-b border-white/10 relative z-30">
               <span className="font-bold flex items-center gap-2"><FaDesktop className="text-blue-400"/> Presenting: {activeResource.name}</span>
-              {isHost && (
-                <button onClick={handleStopPresentation} className="bg-red-600 px-3 py-1 text-xs font-bold rounded-lg hover:bg-red-500">Stop Presenting</button>
-              )}
+              {isHost && <button onClick={handleStopPresentation} className="bg-red-600 px-3 py-1 text-xs font-bold rounded-lg hover:bg-red-500">Stop Presenting</button>}
             </div>
-            {/* Content */}
             <div className="flex-1 p-4 flex items-center justify-center relative">
-              {activeResource.type.includes("image") ? (
-                <img src={activeResource.data} className="max-w-full max-h-full object-contain shadow-2xl rounded-lg" alt="Presentation" />
-              ) : activeResource.type === "link" ? (
-                <div className="text-center">
-                  <p className="text-gray-400 mb-4">Sharing external link...</p>
-                  <a href={activeResource.url} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline text-2xl font-bold">{activeResource.url}</a>
-                </div>
-              ) : (
-                <iframe src={activeResource.data} className="w-full h-full bg-white rounded-lg" title="PDF Presentation" />
-              )}
+              {activeResource.type.includes("image") ? <img src={activeResource.data} className="max-w-full max-h-full object-contain shadow-2xl rounded-lg" alt="Presentation" /> : activeResource.type === "link" ? <div className="text-center"><p className="text-gray-400 mb-4">Sharing external link...</p><a href={activeResource.url} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline text-2xl font-bold">{activeResource.url}</a></div> : <iframe src={activeResource.data} className="w-full h-full bg-white rounded-lg" title="PDF Presentation" />}
             </div>
           </div>
         ) : (
-          // STANDARD VIDEO MODE
           <>
             {isHost ? (
               <video ref={localVideoRef} autoPlay muted playsInline className="w-full h-full object-cover" />
             ) : (
               <>
-                {Object.entries(remoteStreams).map(([id, stream]) => (
-                  <video key={id} ref={el => { if (el && el.srcObject !== stream) { el.srcObject = stream; el.play().catch(() => {}); } }} autoPlay playsInline className="w-full h-full object-cover" />
-                ))}
-                {Object.keys(remoteStreams).length === 0 && timerData.mode !== 'break' && (
-                  <div className="w-full h-full flex items-center justify-center"><p className="text-gray-500">Waiting for host...</p></div>
-                )}
+                {Object.entries(remoteStreams).map(([id, stream]) => <video key={id} ref={el => { if (el && el.srcObject !== stream) { el.srcObject = stream; el.play().catch(() => {}); } }} autoPlay playsInline className="w-full h-full object-cover" />)}
+                {Object.keys(remoteStreams).length === 0 && timerData.mode !== 'break' && <div className="w-full h-full flex items-center justify-center"><p className="text-gray-500">Waiting for host...</p></div>}
               </>
             )}
           </>
@@ -593,42 +645,73 @@ export default function RoomMessages({ room, onBack }) {
               <button onClick={() => setShowFiles(false)} className="text-gray-400 hover:text-gray-600"><FaTimes /></button>
             </div>
             <div className="flex-1 p-5 overflow-y-auto space-y-3 bg-gray-50/50">
-              {isAddingResource && (
-                <form onSubmit={handleAddResource} className="bg-white p-4 rounded-xl shadow-md border border-blue-100 mb-4 animate-slideUp">
-                  <input value={newResourceName} onChange={e => setNewResourceName(e.target.value)} placeholder="Title" className="w-full mb-2 p-2 border rounded-lg text-sm" autoFocus />
-                  <input value={newResourceLink} onChange={e => setNewResourceLink(e.target.value)} placeholder="Paste Link" className="w-full mb-3 p-2 border rounded-lg text-sm" />
-                  <div className="flex gap-2"><button type="submit" className="flex-1 bg-blue-600 text-white py-1.5 rounded-lg text-sm font-bold">Add</button><button type="button" onClick={() => setIsAddingResource(false)} className="flex-1 bg-gray-100 text-gray-600 py-1.5 rounded-lg text-sm font-bold">Cancel</button></div>
-                </form>
+              {/* --- PENDING APPROVAL (Host Only) --- */}
+              {isHost && resources.filter(r => !r.approved).length > 0 && (
+                <div className="mb-6 animate-fadeIn">
+                  <h4 className="text-xs font-extrabold text-orange-600 uppercase tracking-widest mb-3 flex items-center gap-2">
+                    <FaClock /> Pending Approval ({resources.filter(r => !r.approved).length})
+                  </h4>
+                  {resources.filter(r => !r.approved).map(res => (
+                    <div key={res.id} className="bg-orange-50/50 p-4 rounded-xl border border-orange-200 mb-3 hover:shadow-md transition-shadow">
+                      <div className="flex justify-between items-start mb-2">
+                        <span className="text-sm font-bold text-gray-800 truncate w-32">{res.name}</span>
+                        <div className="flex gap-2">
+                          <button onClick={() => handleApproveResource(res.id)} className="bg-green-100 text-green-600 p-2 rounded-lg hover:bg-green-200 transition" title="Approve"><FaCheckCircle size={14} /></button>
+                          <button onClick={() => handleDeleteResource(res.id)} className="bg-red-100 text-red-500 p-2 rounded-lg hover:bg-red-200 transition" title="Reject"><FaTrash size={12} /></button>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-gray-500">From: {res.addedBy}</p>
+                    </div>
+                  ))}
+                  <div className="h-px bg-gray-200 my-4"></div>
+                </div>
               )}
-              {resources.length === 0 && !isAddingResource && <div className="text-center text-gray-400 mt-10">No resources yet.</div>}
-              {resources.map(res => (
-                <div key={res.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 group hover:shadow-md transition-all">
+
+              {/* --- APPROVED RESOURCES --- */}
+              {resources.filter(r => r.approved).length === 0 && !isAddingResource && <div className="text-center text-gray-400 mt-10">No resources yet.</div>}
+
+              {resources.filter(r => r.approved).map(res => (
+                <div key={res.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 group hover:shadow-md transition-all mb-3">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-3 overflow-hidden">
-                      <div className="bg-blue-50 p-2 rounded-lg text-blue-600">{res.type === 'link' ? <FaLink /> : (res.type && res.type.includes('image') ? <FaImage /> : <FaFilePdf />)}</div>
-                      <div className="truncate"><p className="text-sm font-bold text-gray-800 truncate w-40" title={res.name}>{res.name}</p><p className="text-[10px] text-gray-400">By {res.addedBy}</p></div>
+                      <div className="bg-blue-50 p-2.5 rounded-xl text-blue-600">{res.type === 'link' ? <FaLink /> : (res.type && res.type.includes('image') ? <FaImage /> : <FaFilePdf />)}</div>
+                      <div className="truncate"><p className="text-sm font-bold text-gray-800 truncate w-32" title={res.name}>{res.name}</p><p className="text-[10px] text-gray-400">By {res.addedBy}</p></div>
                     </div>
                     <div className="flex gap-1">
-                      {isHost && <button onClick={() => handlePresentResource(res)} className="text-gray-400 hover:text-blue-600 p-2" title="Present to Room"><FaEye /></button>}
-                      {res.type === 'link' ? <a href={res.url} target="_blank" rel="noreferrer" className="text-gray-400 hover:text-blue-600 p-2"><FaExternalLinkAlt /></a> : <a href={res.data} download={res.name} className="text-gray-400 hover:text-blue-600 p-2"><FaDownload /></a>}
+                      {isHost && (
+                        <>
+                          <button onClick={() => handlePresentResource(res)} className="text-gray-400 hover:text-blue-600 p-2"><FaEye /></button>
+                          <button onClick={() => handleDeleteResource(res.id)} className="text-gray-400 hover:text-red-500 p-2"><FaTrash size={12}/></button>
+                        </>
+                      )}
+                      {!isHost && (res.type === 'link' ? <a href={res.url} target="_blank" rel="noreferrer" className="text-gray-400 hover:text-blue-600 p-2"><FaExternalLinkAlt /></a> : <a href={res.data} download={res.name} className="text-gray-400 hover:text-blue-600 p-2"><FaDownload /></a>)}
                     </div>
                   </div>
-                  {res.type && res.type.includes('image') && <img src={res.data} alt="preview" className="w-full h-32 object-cover rounded-lg border border-gray-100 mt-2 cursor-pointer" onClick={() => handlePresentResource(res)} />}
+                  {res.type && res.type.includes('image') && <img src={res.data} alt="preview" className="w-full h-32 object-cover rounded-lg border border-gray-100 mt-2 cursor-pointer hover:opacity-90" onClick={() => isHost && handlePresentResource(res)} />}
                 </div>
               ))}
+
+              {isAddingResource && (
+                <form onSubmit={handleAddResource} className="bg-white p-4 rounded-xl shadow-lg border border-blue-100 mb-4 animate-slideUp">
+                  <h5 className="text-xs font-bold text-gray-500 uppercase mb-3">Add New Link</h5>
+                  <input value={newResourceName} onChange={e => setNewResourceName(e.target.value)} placeholder="Title" className="w-full mb-3 p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm" autoFocus />
+                  <input value={newResourceLink} onChange={e => setNewResourceLink(e.target.value)} placeholder="Paste URL" className="w-full mb-4 p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm" />
+                  <div className="flex gap-2"><button type="button" onClick={() => setIsAddingResource(false)} className="flex-1 bg-gray-100 text-gray-600 py-2 rounded-lg text-xs font-bold">Cancel</button><button type="submit" className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-xs font-bold">Add</button></div>
+                </form>
+              )}
             </div>
-            <div className="p-4 border-t border-gray-100 bg-white grid grid-cols-2 gap-2">
-              <button onClick={() => setIsAddingResource(true)} className="bg-gray-100 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-200 transition flex items-center justify-center gap-2 text-xs"><FaPlus /> Add Link</button>
+            <div className="p-4 border-t border-gray-100 bg-white grid grid-cols-2 gap-3">
+              <button onClick={() => setIsAddingResource(true)} className="bg-gray-50 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-100 transition flex items-center justify-center gap-2 text-xs border border-gray-200"><FaPlus /> Add Link</button>
               <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept="image/*,application/pdf" />
-              <button onClick={triggerFileInput} disabled={isUploading} className="bg-gray-900 text-white py-3 rounded-xl font-bold hover:bg-gray-800 transition flex items-center justify-center gap-2 text-xs disabled:opacity-50">{isUploading ? "Uploading..." : <><FaCloudUploadAlt /> Upload File</>}</button>
+              <button onClick={triggerFileInput} disabled={isUploading} className="bg-gradient-to-r from-gray-900 to-gray-800 text-white py-3 rounded-xl font-bold hover:shadow-lg transition flex items-center justify-center gap-2 text-xs disabled:opacity-70">{isUploading ? "Uploading..." : <><FaCloudUploadAlt /> Upload File</>}</button>
             </div>
           </>
         )}
       </div>
       <style>{`
         .animate-fadeIn { animation: fadeIn 0.5s ease-out; } @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .animate-slideDown { animation: slideDown 0.5s cubic-bezier(0.16, 1, 0.3, 1); } @keyframes slideDown { from { opacity: 0; transform: translateY(-20px) translateX(-50%); } to { opacity: 1; transform: translateY(0) translateX(-50%); } }
         .animate-slideUp { animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1); } @keyframes slideUp { from { opacity: 0; transform: translateY(40px) translateX(-50%); } to { opacity: 1; transform: translateY(0) translateX(-50%); } }
-        .animate-slideDown { animation: slideDown 0.5s cubic-bezier(0.16, 1, 0.3, 1); } @keyframes slideDown { from { opacity: 0; transform: translateY(-40px) translateX(-50%); } to { opacity: 1; transform: translateY(0) translateX(-50%); } }
         @keyframes float { 0% { transform: translate(-50%, 0) scale(1); opacity: 1; } 100% { transform: translate(-50%, -200px) scale(1.5); opacity: 0; } } .animate-float { animation: float 2s forwards; }
       `}</style>
     </div>
