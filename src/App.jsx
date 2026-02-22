@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { auth, db } from "./firebase";
 import { signOut, updateEmail } from "firebase/auth";
-import { doc, getDoc, setDoc, collection, addDoc } from "firebase/firestore";
+import { doc, getDoc, setDoc, collection, addDoc, onSnapshot } from "firebase/firestore"; // <-- ADDED onSnapshot here
 import { useLocation } from "react-router-dom";
 
 import Home from "./pages/Home";
@@ -13,6 +13,7 @@ import StudyBuddyRoom from "./pages/StudyBuddyRoom";
 import CreateStudyBuddyRoom from "./pages/CreateStudyBuddyRoom";
 import EditProfile from "./pages/EditProfile";
 import CreateRoom from "./pages/CreateRoom";
+import UserStatistics from "./pages/UserStatistics";
 
 export default function App() {
   const [user, setUser] = useState(undefined);
@@ -21,6 +22,7 @@ export default function App() {
   const [showLogin, setShowLogin] = useState(false);
   const [selectedRoom, setSelectedRoom] = useState(null);
   const [editingProfile, setEditingProfile] = useState(false);
+  const [viewingStats, setViewingStats] = useState(false);
   const [creatingRoom, setCreatingRoom] = useState(false);
   const [creatingStudyBuddy, setCreatingStudyBuddy] = useState(false);
   const [showStudyBuddyRoom, setShowStudyBuddyRoom] = useState(false);
@@ -28,38 +30,51 @@ export default function App() {
   const [showJoinLoginModal, setShowJoinLoginModal] = useState(false);
   const location = useLocation();
 
-  // Listen for auth changes and fetch profile
+  // --- FIXED: REAL-TIME PROFILE SYNC ---
   useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (u) => {
+    let userUnsub; // To hold the snapshot listener
+    
+    const authUnsub = auth.onAuthStateChanged((u) => {
       setUser(u);
+      
       if (u) {
+        // Instead of getDoc (which runs once), we use onSnapshot to listen for live updates
         const docRef = doc(db, "users", u.uid);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          // Make sure uid is included
-          setProfile({
-            ...docSnap.data(),
-            uid: u.uid,
-          });
-        } else {
-          setProfile({
-            username: u.email.split("@")[0],
-            fullName: "",
-            fieldOfStudy: "",
-            email: u.email,
-            photoBase64: null,
-            uid: u.uid,
-          });
-        }
+        
+        userUnsub = onSnapshot(docRef, (docSnap) => {
+          if (docSnap.exists()) {
+            // Every time score or badges update in DB, this triggers and updates the UI!
+            setProfile({
+              ...docSnap.data(),
+              uid: u.uid,
+            });
+          } else {
+            setProfile({
+              username: u.email.split("@")[0],
+              fullName: "",
+              fieldOfStudy: "",
+              email: u.email,
+              photoBase64: null,
+              uid: u.uid,
+              totalScore: 0,
+              totalFocusTime: 0,
+              badges: []
+            });
+          }
+        });
       } else {
         setProfile(null);
+        if (userUnsub) userUnsub(); // cleanup listener when logged out
       }
       setShowLogin(false);
     });
-    return () => unsubscribe();
+
+    return () => {
+      authUnsub();
+      if (userUnsub) userUnsub();
+    };
   }, []);
 
-  // Handle join link from URL
   useEffect(() => {
     const pathSegments = location.pathname.split("/");
     if (pathSegments[1] === "join" && pathSegments[2]) {
@@ -69,7 +84,6 @@ export default function App() {
     }
   }, [location.pathname]);
 
-  // After user logs in via join modal, join the pending room
   useEffect(() => {
     if (user && pendingRoomId && !showJoinLoginModal) {
       handleJoinRoom(pendingRoomId);
@@ -77,7 +91,6 @@ export default function App() {
     }
   }, [user, pendingRoomId, showJoinLoginModal]);
 
-  // Handle joining a room via invite link
   const handleJoinRoom = async (roomId) => {
     try {
       const roomRef = doc(db, "studyRooms", roomId);
@@ -95,7 +108,6 @@ export default function App() {
     }
   };
 
-  // Save profile changes
   const handleProfileUpdate = async (updatedData) => {
     try {
       const docRef = doc(db, "users", user.uid);
@@ -128,7 +140,6 @@ export default function App() {
     setShowStudyBuddyRoom(false);
   };
 
-  // Create Regular Room
   const handleCreateRoom = () => {
     if (!user) {
       alert("Please login to create a room!");
@@ -167,7 +178,6 @@ export default function App() {
     }
   };
 
-  // Create Study Buddy Room
   const handleCreateStudyBuddy = () => {
     if (!user) {
       alert("Please login to create a room!");
@@ -176,7 +186,6 @@ export default function App() {
     setCreatingStudyBuddy(true);
   };
   
-
   const handleSaveStudyBuddyRoom = async (roomData) => {
     try {
       const docRef = await addDoc(collection(db, "studyRooms"), {
@@ -198,8 +207,6 @@ export default function App() {
         type: "studyBuddy",
         timer: initialTimer,
       };
-
-      console.log("StudyBuddy Room Created:", newRoom);
       
       setCreatingStudyBuddy(false);
       setSelectedRoom(newRoom);
@@ -215,9 +222,6 @@ export default function App() {
     setSelectedRoom(null);
   };
 
-  // --- RENDERING LOGIC ---
-
-  // 1. Handle Loading State
   if (user === undefined)
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-blue-50">
@@ -228,21 +232,15 @@ export default function App() {
       </div>
     );
 
-  // 2. MOVE THIS HERE: Show Login page if showLogin is true
-  // This ensures that when Home.jsx calls onLoginClick, this screen appears immediately.
   if (showLogin) return <Login onLogin={() => setShowLogin(false)} onBack={() => setShowLogin(false)} />;
 
-  // 3. Special login for join invite links
   if (showJoinLoginModal && pendingRoomId) {
     return <Login onLogin={() => setShowJoinLoginModal(false)} onBack={() => setShowJoinLoginModal(false)} />;
   }
 
-  // 4. Show Home only if no user and not a guest
   if (!user && !isGuest)
     return <Home onGuest={() => setIsGuest(true)} onLoginClick={() => setShowLogin(true)} />;
 
-  // 5. Auth-protected Views (These stay exactly as they were)
-  // Since user is now defined or isGuest is true, your study buddy logic will work here
   if (editingProfile)
     return <EditProfile user={profile} onSave={handleProfileUpdate} onCancel={() => setEditingProfile(false)} />;
 
@@ -252,13 +250,15 @@ export default function App() {
   if (creatingStudyBuddy)
     return <CreateStudyBuddyRoom onSave={handleSaveStudyBuddyRoom} onCancel={() => setCreatingStudyBuddy(false)} />;
 
+  if (viewingStats)
+    return <UserStatistics user={profile} onBack={() => setViewingStats(false)} />;
+
   if (showStudyBuddyRoom && selectedRoom)
     return <StudyBuddyRoom room={selectedRoom} user={profile} onBack={handleExitStudyBuddyRoom} />;
 
   if (selectedRoom)
     return <RoomMessages room={selectedRoom} user={profile} onBack={() => setSelectedRoom(null)} />;
 
-  // 6. Main App Dashboard
   return (
     <StudyRoomList
       user={profile}
@@ -267,6 +267,7 @@ export default function App() {
       onEditProfile={() => setEditingProfile(true)}
       onCreateRoom={handleCreateRoom}
       onOpenStudyBuddyRoom={handleCreateStudyBuddy}
+      onShowStats={() => setViewingStats(true)} 
     />
   );
 }

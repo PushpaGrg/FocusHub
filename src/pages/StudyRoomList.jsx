@@ -3,13 +3,112 @@ import { useEffect, useState } from "react";
 import { db } from "../firebase";
 import { 
   FaPlus, FaLayerGroup, FaSignOutAlt, FaUser, FaVideo, 
-  FaEye, FaLock, FaCrown, FaDoorOpen, FaTimes 
+  FaEye, FaLock, FaCrown, FaDoorOpen, FaTimes, FaChartBar,
+  FaSearch, FaLaptopCode, FaHeadphones, FaStethoscope, FaBook, FaCoffee, FaGlobe
 } from "react-icons/fa";
 import CreateRoom from "./CreateRoom";
 import { addDoc, collection, onSnapshot, query, orderBy, serverTimestamp } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
-// --- REUSABLE NAVBAR ICON BUTTON ---
+// Dummy avatars for social proof UI
+const getDummyAvatars = (seed) => [
+  `https://i.pravatar.cc/150?u=${seed}1`,
+  `https://i.pravatar.cc/150?u=${seed}2`,
+  `https://i.pravatar.cc/150?u=${seed}3`
+];
+
+// Pre-defined dummy rooms with categories and fake users
+const DUMMY_ROOMS = [
+  {
+    id: "dummy-1",
+    name: "Late Night Med Students",
+    description: "Silent study session. Pomodoro 50/10. Med students only but others welcome to lurk!",
+    isLive: true,
+    category: "Medical",
+    previewURL: "https://assets.mixkit.co/videos/preview/mixkit-young-woman-working-on-a-laptop-at-home-5047-small.mp4",
+    fallbackImage: "https://images.unsplash.com/photo-1576091160399-112ba8d25d1d?auto=format&fit=crop&w=800&q=80",
+    viewers: 142,
+    activeUsers: getDummyAvatars('med'),
+    isDummy: true,
+    createdBy: "system_dummy"
+  },
+  {
+    id: "dummy-2",
+    name: "CS Majors Leetcode Grind",
+    description: "Prepping for FAANG interviews. Camera on for accountability!",
+    isLive: true,
+    category: "Tech",
+    previewURL: "https://assets.mixkit.co/videos/preview/mixkit-hands-typing-on-a-laptop-keyboard-4171-small.mp4",
+    fallbackImage: "https://images.unsplash.com/photo-1555066931-4365d14bab8c?auto=format&fit=crop&w=800&q=80",
+    viewers: 205,
+    activeUsers: getDummyAvatars('tech'),
+    isDummy: true,
+    createdBy: "system_dummy"
+  },
+  {
+    id: "dummy-3",
+    name: "Library Vibes (Silent)",
+    description: "Just reading and taking notes. Please keep the chat quiet and focused.",
+    isLive: true,
+    category: "Quiet",
+    previewURL: "https://assets.mixkit.co/videos/preview/mixkit-girl-sitting-in-a-cafe-reading-a-book-4248-small.mp4",
+    fallbackImage: "https://images.unsplash.com/photo-1507842217343-583bb7270b66?auto=format&fit=crop&w=800&q=80",
+    viewers: 56,
+    activeUsers: getDummyAvatars('lib'),
+    isDummy: true,
+    createdBy: "system_dummy"
+  },
+  {
+    id: "dummy-4",
+    name: "Law School Bar Prep",
+    description: "12 hour grind today. Join if you want serious accountability.",
+    isLive: true,
+    category: "Reading",
+    previewURL: "https://assets.mixkit.co/videos/preview/mixkit-student-walking-in-a-library-4315-small.mp4",
+    fallbackImage: "https://images.unsplash.com/photo-1589829085413-56de8ae18c73?auto=format&fit=crop&w=800&q=80",
+    viewers: 310,
+    activeUsers: getDummyAvatars('law'),
+    isDummy: true,
+    createdBy: "system_dummy"
+  },
+  {
+    id: "dummy-5",
+    name: "Lofi Hip Hop Study Beats",
+    description: "Chill vibes, low stress. Everyone is welcome. We are currently working on assignments.",
+    isLive: true,
+    category: "Music",
+    previewURL: "https://assets.mixkit.co/videos/preview/mixkit-woman-working-on-laptop-at-home-5054-small.mp4",
+    fallbackImage: "https://images.unsplash.com/photo-1516321318423-f06f85e504b3?auto=format&fit=crop&w=800&q=80",
+    viewers: 89,
+    activeUsers: getDummyAvatars('lofi'),
+    isDummy: true,
+    createdBy: "system_dummy"
+  },
+  {
+    id: "dummy-6",
+    name: "Productivity & Planning",
+    description: "Sunday reset. Planning the week, journaling, and light reading.",
+    isLive: true,
+    category: "Quiet",
+    previewURL: "https://assets.mixkit.co/videos/preview/mixkit-hands-holding-a-book-and-reading-4316-small.mp4",
+    fallbackImage: "https://images.unsplash.com/photo-1484480974693-6ca0a78fb36b?auto=format&fit=crop&w=800&q=80",
+    viewers: 42,
+    activeUsers: getDummyAvatars('plan'),
+    isDummy: true,
+    createdBy: "system_dummy"
+  }
+];
+
+const CATEGORIES = [
+  { name: "All", icon: <FaGlobe /> },
+  { name: "Tech", icon: <FaLaptopCode /> },
+  { name: "Medical", icon: <FaStethoscope /> },
+  { name: "Reading", icon: <FaBook /> },
+  { name: "Music", icon: <FaHeadphones /> },
+  { name: "Quiet", icon: <FaCoffee /> }
+];
+
+// Helper component for navbar buttons
 const NavIconButton = ({ onClick, icon, label, active = false }) => {
   return (
     <div className="relative group z-50">
@@ -23,28 +122,39 @@ const NavIconButton = ({ onClick, icon, label, active = false }) => {
       >
         <div className="text-lg">{icon}</div>
       </button>
-      
-      {/* Tooltip */}
       <div className="absolute top-16 left-1/2 transform -translate-x-1/2 px-3 py-1.5 bg-white text-gray-600 text-[10px] font-bold uppercase tracking-wider rounded-lg shadow-xl opacity-0 group-hover:opacity-100 transition-all duration-200 pointer-events-none whitespace-nowrap border border-gray-100 translate-y-2 group-hover:translate-y-0">
         {label}
-        {/* Little arrow pointing up */}
         <div className="absolute -top-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-white rotate-45 border-t border-l border-gray-100"></div>
       </div>
     </div>
   );
 };
 
-export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProfile, onCreateRoom, onOpenStudyBuddyRoom }) {
+// Animated equalizer component for "Live" indicator
+const LiveEqualizer = () => (
+  <div className="flex items-center gap-[2px] h-3">
+    <div className="w-[3px] bg-red-500 rounded-full animate-eq-1"></div>
+    <div className="w-[3px] bg-red-500 rounded-full animate-eq-2"></div>
+    <div className="w-[3px] bg-red-500 rounded-full animate-eq-3"></div>
+  </div>
+);
+
+export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProfile, onCreateRoom, onOpenStudyBuddyRoom, onShowStats }) {
+  // States
   const [rooms, setRooms] = useState([]);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [showMyRooms, setShowMyRooms] = useState(false);
   const [showCreateRoom, setShowCreateRoom] = useState(false);
   const [cooldowns, setCooldowns] = useState({});
+  
+  // Search and Filter states
+  const [searchQuery, setSearchQuery] = useState("");
+  const [activeCategory, setActiveCategory] = useState("All");
 
   const auth = getAuth();
   const firebaseUser = auth.currentUser;
 
-  // Real-time listener for live updates
+  // Fetch real rooms from Firebase
   useEffect(() => {
     const q = query(collection(db, "studyRooms"), orderBy("createdAt", "desc"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -54,7 +164,7 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
     return () => unsubscribe();
   }, []);
 
-  // Cooldown timer management
+  // Handle cooldown timers
   useEffect(() => {
     const timer = setInterval(() => {
       const newCooldowns = {};
@@ -74,20 +184,31 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
   const username = user?.username || user?.email?.split("@")[0];
   const currentUserId = firebaseUser?.uid || user?.uid;
   
-  const filteredRooms = rooms.filter(room => {
-    if (!showMyRooms) return true;
-    return room.createdBy === currentUserId;
+  // 1. Combine real rooms with dummy rooms
+  const allRooms = showMyRooms 
+    ? rooms.filter(room => room.createdBy === currentUserId)
+    : [...rooms, ...DUMMY_ROOMS];
+
+  // 2. Filter by search and category
+  const filteredRooms = allRooms.filter(room => {
+    const matchesSearch = room.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+                          (room.description && room.description.toLowerCase().includes(searchQuery.toLowerCase()));
+    
+    // Give real rooms a default category so they show up, or just let them pass if "All" is selected
+    const roomCat = room.category || "Quiet"; 
+    const matchesCategory = activeCategory === "All" || roomCat === activeCategory;
+
+    return matchesSearch && matchesCategory;
   });
 
   return (
     <div className="min-h-screen relative bg-gray-50 font-sans overflow-hidden">
       
-      {/* --- BACKGROUND ELEMENTS (Matches Home.jsx) --- */}
-      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+      {/* Background blobs */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none z-0">
         <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 opacity-60"></div>
         <div className="absolute top-[-10%] right-[-5%] w-[500px] h-[500px] bg-purple-200/40 rounded-full blur-3xl animate-float-slow"></div>
         <div className="absolute bottom-[-10%] left-[-10%] w-[600px] h-[600px] bg-blue-200/40 rounded-full blur-3xl animate-float"></div>
-        {/* Grid Pattern */}
         <div className="absolute inset-0" style={{ 
           backgroundImage: 'linear-gradient(rgba(0,0,0,0.03) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.03) 1px, transparent 1px)', 
           backgroundSize: '40px 40px' 
@@ -97,14 +218,12 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
       {/* Navbar */}
       <nav className="fixed w-full bg-white/70 backdrop-blur-xl border-b border-white/50 shadow-sm z-50 transition-all">
         <div className="max-w-7xl mx-auto px-6 py-3 flex justify-between items-center">
-          {/* Logo */}
           <div className="text-2xl font-black bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent cursor-pointer tracking-tight">
             FocusHub
           </div>
 
-          {/* Icon Controls */}
           <div className="flex items-center gap-3">
-            {rooms.length > 0 && (
+            {allRooms.length > 0 && (
               <NavIconButton 
                 onClick={onOpenStudyBuddyRoom} 
                 icon={<FaVideo />} 
@@ -144,6 +263,14 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                     <p className="text-sm font-bold text-gray-800 truncate">{username}</p>
                     <p className="text-xs text-gray-500 truncate font-medium">{user?.email}</p>
                   </div>
+                  
+                  <button
+                    onClick={() => { onShowStats(); setIsDropdownOpen(false); }}
+                    className="flex items-center gap-3 w-full text-left px-5 py-3 hover:bg-gray-50 text-gray-600 hover:text-blue-600 transition text-sm font-medium"
+                  >
+                    <FaChartBar className="text-lg" /> My Statistics
+                  </button>
+
                   <button
                     onClick={() => { onEditProfile(); setIsDropdownOpen(false); }}
                     className="flex items-center gap-3 w-full text-left px-5 py-3 hover:bg-gray-50 text-gray-600 hover:text-blue-600 transition text-sm font-medium"
@@ -163,32 +290,70 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
         </div>
       </nav>
 
-      {/* Main Content */}
+      {/* Main Content Area */}
       <div className="relative pt-28 px-6 pb-12 z-10">
         <div className="max-w-7xl mx-auto">
-          <div className="mb-10 text-center md:text-left">
-            <h1 className="text-4xl md:text-5xl font-extrabold mb-3 text-gray-800 tracking-tight">
-              {showMyRooms ? "My Rooms" : "Live Sessions"}
-            </h1>
-            <p className="text-lg text-gray-500 font-medium max-w-2xl">
-              {showMyRooms
-                ? `You have created ${filteredRooms.length} active room${filteredRooms.length !== 1 ? 's' : ''}.`
-                : `Join ${rooms.length} active study room${rooms.length !== 1 ? 's' : ''} and boost your productivity.`}
-            </p>
+          
+          {/* Header & Controls Container */}
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
+            <div>
+              <h1 className="text-4xl md:text-5xl font-extrabold mb-3 text-gray-800 tracking-tight">
+                {showMyRooms ? "My Rooms" : "Live Sessions"}
+              </h1>
+              <p className="text-lg text-gray-500 font-medium">
+                {showMyRooms
+                  ? `You have created ${filteredRooms.length} active room${filteredRooms.length !== 1 ? 's' : ''}.`
+                  : `Find a room and start studying with others.`}
+              </p>
+            </div>
+
+            {/* Search Bar */}
+            {!showMyRooms && (
+              <div className="relative w-full md:w-72">
+                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                  <FaSearch className="text-gray-400" />
+                </div>
+                <input
+                  type="text"
+                  placeholder="Search rooms..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full pl-10 pr-4 py-3 bg-white/60 backdrop-blur-md border border-white focus:border-blue-400 focus:ring-2 focus:ring-blue-200 rounded-xl shadow-sm text-sm outline-none transition-all"
+                />
+              </div>
+            )}
           </div>
 
+          {/* Category Pills */}
+          {!showMyRooms && (
+            <div className="flex gap-3 overflow-x-auto pb-4 mb-6 scrollbar-hide">
+              {CATEGORIES.map(cat => (
+                <button
+                  key={cat.name}
+                  onClick={() => setActiveCategory(cat.name)}
+                  className={`flex items-center gap-2 px-5 py-2.5 rounded-full whitespace-nowrap text-sm font-bold transition-all shadow-sm border ${
+                    activeCategory === cat.name
+                      ? "bg-gradient-to-r from-blue-600 to-purple-600 text-white border-transparent"
+                      : "bg-white text-gray-600 border-gray-200 hover:bg-gray-50 hover:border-gray-300"
+                  }`}
+                >
+                  {cat.icon} {cat.name}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Render Rooms */}
           {filteredRooms.length === 0 ? (
             <div className="text-center py-24 bg-white/40 backdrop-blur-sm rounded-[2rem] border border-white shadow-xl">
               <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center mx-auto mb-6 shadow-md text-4xl text-blue-200">
                 <FaLayerGroup />
               </div>
               <h3 className="text-2xl font-bold text-gray-700 mb-2">
-                {showMyRooms ? "No rooms created yet" : "No study rooms available"}
+                No rooms found
               </h3>
               <p className="text-gray-500 mb-8 max-w-md mx-auto">
-                {showMyRooms
-                  ? "Create your own space to study with friends or invite others to join you."
-                  : "The library is empty! Be the first to open a study room."}
+                {searchQuery ? "Try adjusting your search or category." : "Be the first to open a room!"}
               </p>
               <button
                 onClick={() => setShowCreateRoom(true)}
@@ -205,9 +370,9 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                   className="bg-white rounded-[2rem] shadow-lg shadow-gray-200/50 hover:shadow-2xl hover:shadow-blue-500/10 transition-all duration-300 group cursor-pointer border border-gray-100 overflow-hidden flex flex-col hover:-translate-y-2"
                   onClick={() => !cooldowns[room.id] && onSelectRoom(room)}
                 >
-                  {/* Thumbnail Section */}
-                  <div className="relative h-56 bg-gray-100 overflow-hidden">
-                    {room.liveThumbnail ? (
+                  {/* Thumbnail/Video Area */}
+                  <div className="relative h-56 bg-gray-900 overflow-hidden">
+                    {room.liveThumbnail && !room.isDummy ? (
                       <img 
                         src={room.liveThumbnail} 
                         alt="Live Preview" 
@@ -218,39 +383,54 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                       <video
                         className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity"
                         src={room.previewURL || "/src/assets/girlstudy.mp4"}
-                        autoPlay muted loop
+                        poster={room.fallbackImage || null}
+                        autoPlay 
+                        muted 
+                        loop 
+                        playsInline
                       />
                     )}
                     
-                    {/* Live Badge */}
-                    <div className="absolute top-4 left-4 flex items-center gap-2 bg-white/90 backdrop-blur-md text-gray-800 px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider shadow-sm">
-                      <span className={`w-2 h-2 rounded-full ${room.isLive ? 'bg-red-500 animate-pulse' : 'bg-gray-400'}`}></span>
+                    {/* Live Badge with Animated Equalizer */}
+                    <div className="absolute top-4 left-4 flex items-center gap-2 bg-white/95 backdrop-blur-md text-gray-800 px-3 py-1.5 rounded-xl text-[10px] font-bold uppercase tracking-wider shadow-sm">
+                      {room.isLive ? <LiveEqualizer /> : <span className="w-2 h-2 rounded-full bg-gray-400"></span>}
                       {room.isLive ? "Live" : "Offline"}
                     </div>
                     
-                    {/* Viewers Badge */}
-                    <div className="absolute top-4 right-4 bg-white/90 backdrop-blur-md text-gray-800 px-3 py-1.5 rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm">
-                      <FaEye className="text-blue-500" /> {Math.floor(Math.random() * 150 + 30)}
+                    {/* Avatar Stack + Viewer Count */}
+                    <div className="absolute top-4 right-4 bg-white/95 backdrop-blur-md text-gray-800 pr-3 pl-2 py-1 rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm border border-gray-100">
+                      
+                      {/* ONLY show avatar stack if it's a dummy room */}
+                      {room.isDummy && (
+                        <div className="flex -space-x-2">
+                          {room.activeUsers.map((avatar, i) => (
+                             <img key={i} className="w-6 h-6 rounded-full border-2 border-white object-cover" src={avatar} alt="user" />
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="flex items-center gap-1.5 text-gray-600">
+                        <FaEye className="text-blue-500" /> 
+                        {/* REAL rooms use actual participant count (or 0). DUMMY rooms use fake count. */}
+                        {room.isDummy ? room.viewers : (room.participants?.length || 0)}
+                      </div>
                     </div>
                     
-                    {/* Gradient Overlay for Text Readability */}
-                    <div className="absolute inset-0 bg-gradient-to-t from-gray-900/60 via-transparent to-transparent"></div>
+                    <div className="absolute inset-0 bg-gradient-to-t from-gray-900/70 via-transparent to-transparent"></div>
                     
-                    {/* Title on Image */}
                     <div className="absolute bottom-5 left-5 right-5">
-                      <h3 className="text-white font-bold text-2xl drop-shadow-md truncate leading-tight">
+                      <h3 className="text-white font-bold text-xl drop-shadow-md line-clamp-2 leading-tight">
                         {room.name}
                       </h3>
                     </div>
                   </div>
 
-                  {/* Content Section */}
+                  {/* Room Details Area */}
                   <div className="p-6 flex-1 flex flex-col justify-between bg-white">
                     <div>
-                      {/* Tags */}
-                      <div className="flex flex-wrap gap-2 mb-4">
-                        {room.createdBy === currentUserId && (
-                          <span className="flex items-center gap-1 bg-gradient-to-r from-yellow-50 to-orange-50 text-orange-600 border border-orange-100 px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wide">
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {room.createdBy === currentUserId && !room.isDummy && (
+                          <span className="flex items-center gap-1 bg-orange-50 text-orange-600 border border-orange-100 px-2.5 py-1 rounded-lg text-[10px] font-extrabold uppercase tracking-wide">
                             <FaCrown /> Owner
                           </span>
                         )}
@@ -270,7 +450,6 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                       </p>
                     </div>
 
-                    {/* Action Button (Matches Home/Login gradient) */}
                     <button
                       disabled={!!cooldowns[room.id]}
                       onClick={(e) => {
@@ -315,9 +494,9 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                   return;
                 }
                 
-                // 1. Create Room Object
                 const newRoom = {
                   ...roomData,
+                  category: "Quiet", // Default category for user created rooms
                   createdBy: firebaseUser.uid,
                   createdAt: serverTimestamp(),
                   participants: [],
@@ -325,10 +504,7 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                   liveThumbnail: null
                 };
 
-                // 2. Add to Firestore
                 const docRef = await addDoc(collection(db, "studyRooms"), newRoom);
-                
-                // 3. Auto-Join (Trigger onSelectRoom immediately)
                 setShowCreateRoom(false);
                 onSelectRoom({ id: docRef.id, ...newRoom });
               }}
@@ -337,8 +513,21 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
         </div>
       )}
 
+      {/* Global styles for animations and hiding scrollbars */}
       <style>
         {`
+          .scrollbar-hide::-webkit-scrollbar { display: none; }
+          .scrollbar-hide { -ms-overflow-style: none; scrollbar-width: none; }
+
+          /* Equalizer Animation for Live Badge */
+          @keyframes eq {
+            0%, 100% { height: 4px; }
+            50% { height: 12px; }
+          }
+          .animate-eq-1 { animation: eq 0.8s ease-in-out infinite; }
+          .animate-eq-2 { animation: eq 0.8s ease-in-out infinite 0.2s; }
+          .animate-eq-3 { animation: eq 0.8s ease-in-out infinite 0.4s; }
+
           .animate-slideDown { animation: slideDown 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
           @keyframes slideDown { from { opacity: 0; transform: translateY(-10px) scale(0.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
           
