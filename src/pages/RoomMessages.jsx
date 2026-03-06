@@ -88,7 +88,7 @@ const SessionReportModal = ({ stats, onClose }) => {
             </div>
           </div>
         ) : (
-            <p className="text-xs text-gray-400 mb-6 italic">No badges this time. Stay focused >10m for Zen Master!</p>
+            <p className="text-xs text-gray-400 mb-6 italic">No badges this time. Stay focused more than 10m for Zen Master!</p>
         )}
         <button onClick={onClose} className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-3.5 rounded-xl font-bold text-lg hover:shadow-lg hover:scale-[1.02] transition-all">Continue</button>
       </div>
