@@ -4,7 +4,7 @@ import { db } from "../firebase";
 import { 
   FaPlus, FaLayerGroup, FaSignOutAlt, FaUser, FaVideo, 
   FaEye, FaLock, FaCrown, FaDoorOpen, FaTimes, FaChartBar,
-  FaSearch, FaLaptopCode, FaHeadphones, FaStethoscope, FaBook, FaCoffee, FaGlobe
+  FaSearch, FaLaptopCode, FaHeadphones, FaStethoscope, FaBook, FaCoffee, FaGlobe, FaBookOpen
 } from "react-icons/fa";
 import CreateRoom from "./CreateRoom";
 import { addDoc, collection, onSnapshot, query, orderBy, serverTimestamp } from "firebase/firestore";
@@ -139,7 +139,7 @@ const LiveEqualizer = () => (
   </div>
 );
 
-export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProfile, onCreateRoom, onOpenStudyBuddyRoom, onShowStats }) {
+export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProfile, onCreateRoom, onOpenStudyBuddyRoom, onShowStats, onShowFlashcards }) {
   // States
   const [rooms, setRooms] = useState([]);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -194,7 +194,6 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
     const matchesSearch = room.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
                           (room.description && room.description.toLowerCase().includes(searchQuery.toLowerCase()));
     
-    // Give real rooms a default category so they show up, or just let them pass if "All" is selected
     const roomCat = room.category || "Quiet"; 
     const matchesCategory = activeCategory === "All" || roomCat === activeCategory;
 
@@ -227,9 +226,16 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
               <NavIconButton 
                 onClick={onOpenStudyBuddyRoom} 
                 icon={<FaVideo />} 
-                label="Study Buddy Mode" 
+                label="Study Buddy" 
               />
             )}
+
+            {/* NEW FLASHCARD BUTTON */}
+            <NavIconButton 
+              onClick={onShowFlashcards} 
+              icon={<FaBookOpen />} 
+              label="Flashcards" 
+            />
 
             <NavIconButton 
               onClick={() => setShowCreateRoom(true)} 
@@ -400,7 +406,6 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                     {/* Avatar Stack + Viewer Count */}
                     <div className="absolute top-4 right-4 bg-white/95 backdrop-blur-md text-gray-800 pr-3 pl-2 py-1 rounded-xl text-xs font-bold flex items-center gap-2 shadow-sm border border-gray-100">
                       
-                      {/* ONLY show avatar stack if it's a dummy room */}
                       {room.isDummy && (
                         <div className="flex -space-x-2">
                           {room.activeUsers.map((avatar, i) => (
@@ -411,7 +416,6 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
 
                       <div className="flex items-center gap-1.5 text-gray-600">
                         <FaEye className="text-blue-500" /> 
-                        {/* REAL rooms use actual participant count (or 0). DUMMY rooms use fake count. */}
                         {room.isDummy ? room.viewers : (room.participants?.length || 0)}
                       </div>
                     </div>
@@ -476,7 +480,6 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
         </div>
       </div>
 
-      {/* Create Room Modal */}
       {showCreateRoom && (
         <div className="fixed inset-0 flex items-center justify-center z-50 bg-black/40 backdrop-blur-sm p-4 animate-fadeIn">
           <div className="bg-white p-8 rounded-[2rem] shadow-2xl w-full max-w-md relative animate-slideUp border border-white/50">

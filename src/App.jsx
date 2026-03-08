@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { auth, db } from "./firebase";
 import { signOut, updateEmail } from "firebase/auth";
-import { doc, getDoc, setDoc, collection, addDoc, onSnapshot } from "firebase/firestore"; // <-- ADDED onSnapshot here
+import { doc, getDoc, setDoc, collection, addDoc, onSnapshot } from "firebase/firestore";
 import { useLocation } from "react-router-dom";
 
 import Home from "./pages/Home";
@@ -14,6 +14,7 @@ import CreateStudyBuddyRoom from "./pages/CreateStudyBuddyRoom";
 import EditProfile from "./pages/EditProfile";
 import CreateRoom from "./pages/CreateRoom";
 import UserStatistics from "./pages/UserStatistics";
+import FlashcardHub from "./pages/FlashcardHub"; // <-- THIS WAS MISSING!
 
 export default function App() {
   const [user, setUser] = useState(undefined);
@@ -23,6 +24,7 @@ export default function App() {
   const [selectedRoom, setSelectedRoom] = useState(null);
   const [editingProfile, setEditingProfile] = useState(false);
   const [viewingStats, setViewingStats] = useState(false);
+  const [viewingFlashcards, setViewingFlashcards] = useState(false); // Flashcard State
   const [creatingRoom, setCreatingRoom] = useState(false);
   const [creatingStudyBuddy, setCreatingStudyBuddy] = useState(false);
   const [showStudyBuddyRoom, setShowStudyBuddyRoom] = useState(false);
@@ -30,20 +32,18 @@ export default function App() {
   const [showJoinLoginModal, setShowJoinLoginModal] = useState(false);
   const location = useLocation();
 
-  // --- FIXED: REAL-TIME PROFILE SYNC ---
+  // --- REAL-TIME PROFILE SYNC ---
   useEffect(() => {
-    let userUnsub; // To hold the snapshot listener
+    let userUnsub; 
     
     const authUnsub = auth.onAuthStateChanged((u) => {
       setUser(u);
       
       if (u) {
-        // Instead of getDoc (which runs once), we use onSnapshot to listen for live updates
         const docRef = doc(db, "users", u.uid);
         
         userUnsub = onSnapshot(docRef, (docSnap) => {
           if (docSnap.exists()) {
-            // Every time score or badges update in DB, this triggers and updates the UI!
             setProfile({
               ...docSnap.data(),
               uid: u.uid,
@@ -64,7 +64,7 @@ export default function App() {
         });
       } else {
         setProfile(null);
-        if (userUnsub) userUnsub(); // cleanup listener when logged out
+        if (userUnsub) userUnsub(); 
       }
       setShowLogin(false);
     });
@@ -253,6 +253,9 @@ export default function App() {
   if (viewingStats)
     return <UserStatistics user={profile} onBack={() => setViewingStats(false)} />;
 
+  if (viewingFlashcards)
+    return <FlashcardHub user={profile} onBack={() => setViewingFlashcards(false)} />; // <-- THIS HANDLES THE RENDER
+
   if (showStudyBuddyRoom && selectedRoom)
     return <StudyBuddyRoom room={selectedRoom} user={profile} onBack={handleExitStudyBuddyRoom} />;
 
@@ -268,6 +271,7 @@ export default function App() {
       onCreateRoom={handleCreateRoom}
       onOpenStudyBuddyRoom={handleCreateStudyBuddy}
       onShowStats={() => setViewingStats(true)} 
+      onShowFlashcards={() => setViewingFlashcards(true)} // <-- THIS TRIGGERS THE RENDER
     />
   );
 }

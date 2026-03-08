@@ -12,7 +12,8 @@ import {
   FaStopwatch, FaCoffee, FaCheck, FaThumbsUp, FaHeart, FaBolt, 
   FaExclamationTriangle, FaPaperclip, FaLink, FaExternalLinkAlt, 
   FaTimes, FaPlus, FaCloudUploadAlt, FaFilePdf, FaImage, FaDownload, 
-  FaDesktop, FaTrash, FaCheckCircle, FaClock, FaInfoCircle, FaMedal, FaStar
+  FaDesktop, FaTrash, FaCheckCircle, FaClock, FaInfoCircle, FaMedal, FaStar,
+  FaTasks, FaBrain, FaPlay, FaCheckCircle as FaCheckIcon, FaTimesCircle
 } from "react-icons/fa";
 const Peer = window.SimplePeer;
 import { useAuthState } from "react-firebase-hooks/auth";
@@ -76,6 +77,7 @@ const SessionReportModal = ({ stats, onClose }) => {
             <p className="font-bold text-blue-800 mb-1">Scoring Breakdown:</p>
             <p className="flex justify-between"><span>• Time Focused (+10/min):</span> <span>+{stats.minutes * 10}</span></p>
             <p className="flex justify-between"><span>• Uploads (+50/ea):</span> <span>+{stats.uploads * 50}</span></p>
+            <p className="flex justify-between text-green-600 font-bold"><span>• Quiz Points:</span> <span>+{stats.quizPoints}</span></p>
             <p className="flex justify-between text-red-500"><span>• Distractions (-20/ea):</span> <span>-{stats.distractions * 20}</span></p>
         </div>
         {stats.badges.length > 0 ? (
@@ -88,7 +90,7 @@ const SessionReportModal = ({ stats, onClose }) => {
             </div>
           </div>
         ) : (
-            <p className="text-xs text-gray-400 mb-6 italic">No badges this time. Stay focused more than 10m for Zen Master!</p>
+            <p className="text-xs text-gray-400 mb-6 italic">No badges this time. Keep practicing to earn more!</p>
         )}
         <button onClick={onClose} className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-3.5 rounded-xl font-bold text-lg hover:shadow-lg hover:scale-[1.02] transition-all">Continue</button>
       </div>
@@ -138,6 +140,7 @@ const ControlButton = ({ onClick, icon, label, variant = "default", disabled = f
 
 export default function RoomMessages({ room, onBack }) {
   const [user] = useAuthState(auth);
+  const [lastMessageTime, setLastMessageTime] = useState(0);
   if (!user || !room) return <div className="h-screen flex items-center justify-center text-white bg-gray-900">Loading...</div>;
 
   const isDummy = room?.isDummy;
@@ -149,11 +152,12 @@ export default function RoomMessages({ room, onBack }) {
   const [reactions, setReactions] = useState([]);
   
   const [streamLive, setStreamLive] = useState(isDummy ? true : false);
-  
   const [camOn, setCamOn] = useState(false);
   const [micOn, setMicOn] = useState(false);
+  
   const [showChat, setShowChat] = useState(true);
   const [showFiles, setShowFiles] = useState(false);
+  const [showTasks, setShowTasks] = useState(false); 
   
   const [resources, setResources] = useState([]);
   const [newResourceLink, setNewResourceLink] = useState("");
@@ -163,10 +167,24 @@ export default function RoomMessages({ room, onBack }) {
   const [activeResource, setActiveResource] = useState(null); 
   const fileInputRef = useRef(null);
 
+  const [tasks, setTasks] = useState([]);
+  const [newTaskText, setNewTaskText] = useState("");
+
   const [timerData, setTimerData] = useState({ 
     timeLeft: 1500, isRunning: false, mode: 'work', config: { work: 25, break: 5 }, isConfigured: false, autoStart: false
   });
   const [showTimerModal, setShowTimerModal] = useState(false);
+
+  // --- MULTIPLAYER QUIZ STATE ---
+  const [showQuizPicker, setShowQuizPicker] = useState(false);
+  const [hostDecks, setHostDecks] = useState([]);
+  const [activeQuiz, setActiveQuiz] = useState(null); 
+  const [quizDeckData, setQuizDeckData] = useState(null); 
+  
+  // Local Viewer State for Quiz Logic
+  const [selectedOption, setSelectedOption] = useState(null);
+  const earnedQuizPoints = useRef(0); // Tracks points locally until they leave the room
+  const lastScoredIndex = useRef(-1); // Prevents giving points multiple times for the same question
 
   const [distractionCount, setDistractionCount] = useState(0);
   const [showDistractionAlert, setShowDistractionAlert] = useState(false);
@@ -197,13 +215,15 @@ export default function RoomMessages({ room, onBack }) {
     const endTime = Date.now();
     const durationMinutes = Math.max(1, Math.floor((endTime - sessionStartTime.current) / 1000 / 60));
     
-    let score = (durationMinutes * 10) + (uploadsCount.current * 50) - (distractionCount * 20);
+    // Calculate Score with Quiz Points
+    let score = (durationMinutes * 10) + (uploadsCount.current * 50) + earnedQuizPoints.current - (distractionCount * 20);
     if (score < 0) score = 0;
 
     const badges = [];
     if (distractionCount === 0 && durationMinutes > 10) badges.push("Zen Master");
     if (uploadsCount.current > 0) badges.push("Scholar");
     if (durationMinutes > 30) badges.push("Iron Will");
+    if (earnedQuizPoints.current >= 100) badges.push("Quiz Whiz"); // NEW BADGE
 
     try {
       const userRef = doc(db, "users", user.uid);
@@ -219,21 +239,22 @@ export default function RoomMessages({ room, onBack }) {
       }
     } catch (e) { console.error("Score Error:", e); }
 
-    setSessionReport({ minutes: durationMinutes, score, badges, distractions: distractionCount, uploads: uploadsCount.current });
+    setSessionReport({ 
+        minutes: durationMinutes, 
+        score, 
+        badges, 
+        distractions: distractionCount, 
+        uploads: uploadsCount.current,
+        quizPoints: earnedQuizPoints.current 
+    });
   };
 
   const handleExit = async () => {
       setIsExiting(true);
       if (isHost) {
-          if (streamLive) {
-              await handleStopStream(false);
-              onBack();
-          } else {
-              onBack();
-          }
-      } else {
-          await generateSessionReport();
-      }
+          if (streamLive) { await handleStopStream(false); onBack(); } 
+          else { onBack(); }
+      } else { await generateSessionReport(); }
   };
 
   const handleEndRoom = () => {
@@ -246,61 +267,158 @@ export default function RoomMessages({ room, onBack }) {
     }
   };
 
-  useEffect(() => {
-    if (timerData.mode !== 'work' || !streamLive) {
-      alertSound.pause(); 
-      alertSound.currentTime = 0; 
-      return;
-    }
-
-    const handleVisibilityChange = () => {
-      if (!streamLive) return; 
-
-      if (document.hidden) {
-        setDistractionCount(prev => prev + 1);
-        alertSound.currentTime = 0; 
-        alertSound.play().catch(e => console.warn(e));
-      } else {
-        alertSound.pause(); 
-        alertSound.currentTime = 0;
-        setShowDistractionAlert(true); 
-        setTimeout(() => setShowDistractionAlert(false), 3000); 
-      }
-    };
-    
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      alertSound.pause(); 
-      alertSound.currentTime = 0;
-    };
-  }, [timerData.mode, streamLive]); 
-
+  // --- Main Data Sync (Includes Quiz State) ---
   useEffect(() => {
     if (!room?.id) return;
+    
     const roomUnsub = onSnapshot(roomRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
         if (data.timer) setTimerData(data.timer);
         if (data.activeResource) setActiveResource(data.activeResource); else setActiveResource(null);
         if (!isHost && data.isLive !== undefined) setStreamLive(data.isLive);
+        
+        // Handle Quiz State
+        if (data.activeQuiz) {
+            setActiveQuiz(data.activeQuiz);
+        } else {
+            setActiveQuiz(null);
+            setQuizDeckData(null);
+            setSelectedOption(null); // Reset viewer state if quiz ends
+        }
       } else if (!isDummy) {
         triggerToast("Room ended by host", "info");
         setTimeout(onBack, 2000);
       }
     });
-    const q = query(collection(db, "room_resources"), where("roomId", "==", room.id), orderBy("createdAt", "desc"));
-    const filesUnsub = onSnapshot(q, (snapshot) => {
+
+    const filesUnsub = onSnapshot(query(collection(db, "room_resources"), where("roomId", "==", room.id), orderBy("createdAt", "desc")), (snapshot) => {
       setResources(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
-    return () => { roomUnsub(); filesUnsub(); };
+
+    const tasksUnsub = onSnapshot(query(collection(db, "room_tasks"), where("roomId", "==", room.id), orderBy("createdAt", "asc")), (snapshot) => {
+      setTasks(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    return () => { roomUnsub(); filesUnsub(); tasksUnsub(); };
   }, [room.id, isHost, isDummy]);
 
+  // --- QUIZ LOGIC ---
   useEffect(() => {
-    if (isHost && !activeResource && localStreamRef.current && localVideoRef.current) {
+      const fetchDeck = async () => {
+          if (activeQuiz?.deckId && (!quizDeckData || quizDeckData.id !== activeQuiz.deckId)) {
+              try {
+                  const snap = await getDoc(doc(db, "flashcard_decks", activeQuiz.deckId));
+                  if (snap.exists()) setQuizDeckData({ id: snap.id, ...snap.data() });
+              } catch (err) { console.error("Error loading deck:", err); }
+          }
+      };
+      fetchDeck();
+  }, [activeQuiz?.deckId, quizDeckData]);
+
+  useEffect(() => {
+      const fetchHostDecks = async () => {
+          if (isHost && showQuizPicker) {
+              try {
+                  const q = query(collection(db, "flashcard_decks"), where("createdBy", "==", user.uid));
+                  const snap = await getDocs(q);
+                  setHostDecks(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+              } catch(err) {}
+          }
+      };
+      fetchHostDecks();
+  }, [isHost, showQuizPicker, user.uid]);
+
+  // Detect when Host reveals answer & calculate Viewer score
+  useEffect(() => {
+      if (activeQuiz?.isRevealed && selectedOption && quizDeckData) {
+          const currentCard = quizDeckData.cards[activeQuiz.currentIndex];
+          
+          // Ensure we don't score the same question twice
+          if (lastScoredIndex.current !== activeQuiz.currentIndex) {
+              if (selectedOption === currentCard.back) {
+                  earnedQuizPoints.current += 50;
+                  triggerToast("Correct! +50 Points", "success");
+              } else {
+                  triggerToast("Incorrect answer.", "error");
+              }
+              lastScoredIndex.current = activeQuiz.currentIndex;
+          }
+      }
+  }, [activeQuiz?.isRevealed, selectedOption, quizDeckData, activeQuiz?.currentIndex]);
+
+  // Reset viewer selection when the question changes
+  useEffect(() => {
+      setSelectedOption(null);
+  }, [activeQuiz?.currentIndex]);
+
+  const startLiveQuiz = async (deck) => {
+      if (!deck.cards || deck.cards.length === 0) return triggerToast("Deck is empty!", "error");
+      try {
+          await updateDoc(roomRef, { 
+              activeQuiz: { deckId: deck.id, currentIndex: 0, isRevealed: false } 
+          });
+          setShowQuizPicker(false);
+      } catch (err) { triggerToast("Failed to start quiz", "error"); }
+  };
+
+  const stopLiveQuiz = async () => {
+      if (!isHost) return;
+      try { await updateDoc(roomRef, { activeQuiz: null }); } catch (err) {}
+  };
+
+  const nextQuizQuestion = async () => {
+      if (!isHost || !quizDeckData || !activeQuiz) return;
+      if (activeQuiz.currentIndex < quizDeckData.cards.length - 1) {
+          try {
+              await updateDoc(roomRef, { 
+                  "activeQuiz.currentIndex": activeQuiz.currentIndex + 1,
+                  "activeQuiz.isRevealed": false
+              });
+          } catch(err){}
+      } else {
+          stopLiveQuiz();
+          triggerToast("Quiz Finished!", "success");
+      }
+  };
+
+  const revealAnswer = async () => {
+      if (!isHost || !activeQuiz) return;
+      try { await updateDoc(roomRef, { "activeQuiz.isRevealed": true }); } catch (err) {}
+  };
+
+
+  useEffect(() => {
+    if (isHost && !activeResource && !activeQuiz && localStreamRef.current && localVideoRef.current) {
       localVideoRef.current.srcObject = localStreamRef.current;
     }
-  }, [activeResource, isHost]);
+  }, [activeResource, activeQuiz, isHost]);
+
+  const handleAddTask = async (e) => {
+    e.preventDefault();
+    if (!newTaskText.trim()) return;
+    const displayName = user?.displayName || (user?.email ? user.email.split("@")[0] : "Student");
+    try {
+      await addDoc(collection(db, "room_tasks"), {
+        roomId: room.id, text: newTaskText.trim(), completed: false, addedBy: displayName, createdAt: serverTimestamp()
+      });
+      setNewTaskText("");
+    } catch (err) { triggerToast("Error adding task", "error"); }
+  };
+
+  const handleToggleTask = async (taskId, currentStatus) => {
+    try { await updateDoc(doc(db, "room_tasks", taskId), { completed: !currentStatus }); } 
+    catch (err) { triggerToast("Error updating task", "error"); }
+  };
+
+  const handleDeleteTask = async (taskId) => {
+    try { await deleteDoc(doc(db, "room_tasks", taskId)); } 
+    catch (err) { triggerToast("Error deleting task", "error"); }
+  };
+
+  const totalTasks = tasks.length;
+  const completedTasks = tasks.filter(t => t.completed).length;
+  const taskProgressPercent = totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100);
 
   const handlePresentResource = async (resource) => { if (isHost) await updateDoc(roomRef, { activeResource: resource }); };
   const handleStopPresentation = async () => { if (isHost) await updateDoc(roomRef, { activeResource: null }); };
@@ -396,8 +514,25 @@ export default function RoomMessages({ room, onBack }) {
     e.preventDefault();
     if (!newMsg.trim()) return;
     if (containsSpam(newMsg)) { triggerToast("Spam detected.", "error"); setNewMsg(""); return; }
-    await addDoc(collection(db, "messages"), { roomId: room.id, sender: user.email, text: newMsg.trim(), createdAt: serverTimestamp() });
-    setNewMsg("");
+    const now = Date.now();
+    const COOLDOWN_MS = 2000; 
+
+    if (now - lastMessageTime < COOLDOWN_MS) {
+        const waitTime = ((COOLDOWN_MS - (now - lastMessageTime)) / 1000).toFixed(1);
+        triggerToast(`Please wait ${waitTime}s before sending another message.`, "error");
+        return;
+    }
+
+    try {
+        setLastMessageTime(now);
+        await addDoc(collection(db, "messages"), { 
+            roomId: room.id, 
+            sender: user.email, 
+            text: newMsg.trim(), 
+            createdAt: serverTimestamp() 
+        });
+        setNewMsg("");
+    } catch (err) { triggerToast("Failed to send message.", "error"); }
   };
 
   const handleStartStream = async () => {
@@ -441,11 +576,9 @@ export default function RoomMessages({ room, onBack }) {
      peersRef.current = {};
      if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(t => t.stop()); localStreamRef.current = null; }
      if (signalingUnsubscribeRef.current) signalingUnsubscribeRef.current();
-     await updateDoc(roomRef, { isLive: false, liveThumbnail: null, activeResource: null, "timer.isRunning": false, "timer.isConfigured": false, "timer.timeLeft": 1500, "timer.mode": 'work' });
+     await updateDoc(roomRef, { isLive: false, liveThumbnail: null, activeResource: null, "activeQuiz": null, "timer.isRunning": false, "timer.isConfigured": false, "timer.timeLeft": 1500, "timer.mode": 'work' });
      
-     if (showReport) {
-        await generateSessionReport();
-     }
+     if (showReport) { await generateSessionReport(); }
   };
 
   useEffect(() => {
@@ -490,22 +623,6 @@ export default function RoomMessages({ room, onBack }) {
     return () => clearInterval(interval);
   }, [isHost, streamLive, timerData.mode]);
 
-  useEffect(() => {
-    if (!room?.id) return;
-    const reactionsQuery = query(collection(db, "reactions"), where("roomId", "==", room.id), orderBy("timestamp", "desc"));
-    return onSnapshot(reactionsQuery, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        if (change.type === "added") {
-          const reactionData = change.doc.data();
-          setReactions(prev => [...prev, { id: change.doc.id, emoji: reactionData.emoji }]);
-          setTimeout(() => setReactions(prev => prev.filter(r => r.id !== change.doc.id)), 2000);
-        }
-      });
-    });
-  }, [room?.id]);
-
-  const sendReaction = async (emoji) => { try { await addDoc(collection(db, "reactions"), { roomId: room.id, emoji, timestamp: serverTimestamp(), senderId: user?.uid || "guest" }); } catch (err) {} };
-
   const BreakOverlay = () => {
     if (timerData.mode !== 'break') return null;
     return (
@@ -530,24 +647,126 @@ export default function RoomMessages({ room, onBack }) {
   }
 
   const toggleSidePanel = (panel) => { 
-      if (panel === "chat") { 
-          setShowChat(!showChat); 
-          setShowFiles(false); 
-      } else { 
-          setShowFiles(!showFiles); 
-          setShowChat(false); 
-      } 
+      setShowChat(panel === "chat" ? !showChat : false);
+      setShowFiles(panel === "files" ? !showFiles : false);
+      setShowTasks(panel === "tasks" ? !showTasks : false);
   };
+
+  // Safe checks for rendering the quiz
+  const currentQuizCard = quizDeckData?.cards?.[activeQuiz?.currentIndex];
 
   return (
     <div className="flex h-screen bg-gray-950 overflow-hidden font-sans">
-      <div className="flex-1 relative bg-black">
+      <div className="flex-1 relative bg-black flex flex-col">
         {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
         {confirmDialog && <ConfirmModal title={confirmDialog.title} message={confirmDialog.message} onConfirm={confirmDialog.onConfirm} onCancel={confirmDialog.onCancel} />}
         
         {sessionReport && <SessionReportModal stats={sessionReport} onClose={() => { setSessionReport(null); if(isExiting) onBack(); }} />}
         
-        {activeResource ? (
+        {/* --- LIVE QUIZ PICKER MODAL (Host Only) --- */}
+        {showQuizPicker && isHost && (
+            <div className="absolute inset-0 z-[300] bg-black/80 backdrop-blur-md flex items-center justify-center animate-fadeIn">
+                <div className="bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl">
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-2xl font-bold text-gray-800 flex items-center gap-2"><FaBrain className="text-purple-500"/> Start a Live Quiz</h2>
+                        <button onClick={() => setShowQuizPicker(false)} className="text-gray-400 hover:text-gray-800"><FaTimes /></button>
+                    </div>
+                    {hostDecks.length === 0 ? (
+                        <p className="text-gray-500 text-center py-6">You haven't created any flashcard decks yet. Go to the Flashcard Hub on the dashboard to create one!</p>
+                    ) : (
+                        <div className="space-y-3 max-h-64 overflow-y-auto pr-2">
+                            {hostDecks.map(deck => (
+                                <button key={deck.id} onClick={() => startLiveQuiz(deck)} className="w-full text-left bg-gray-50 hover:bg-purple-50 hover:border-purple-200 border border-gray-200 p-4 rounded-xl transition flex justify-between items-center group">
+                                    <div>
+                                        <p className="font-bold text-gray-800 group-hover:text-purple-700">{deck.title}</p>
+                                        <p className="text-xs text-gray-400">{deck.cards?.length || 0} Cards</p>
+                                    </div>
+                                    <FaPlay className="text-purple-500 opacity-0 group-hover:opacity-100 transition" />
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+        )}
+
+        {/* --- MAIN VIEW LOGIC --- */}
+        {activeQuiz && currentQuizCard ? (
+            /* LIVE MULTIPLAYER QUIZ VIEW */
+            <div className="flex-1 bg-gray-900 flex flex-col items-center justify-center p-8 relative overflow-hidden">
+                <div className="absolute top-6 flex flex-col items-center z-10">
+                    <div className="bg-purple-600 text-white px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest animate-pulse shadow-lg shadow-purple-500/50 mb-2">
+                        Live Group Quiz
+                    </div>
+                    <p className="text-gray-400 font-bold text-sm bg-black/50 px-4 py-1 rounded-full border border-white/10">
+                        {quizDeckData.title} — Question {activeQuiz.currentIndex + 1} of {quizDeckData.cards.length}
+                    </p>
+                </div>
+
+                <div className="bg-white rounded-3xl shadow-2xl p-8 max-w-2xl w-full border-b-8 border-blue-500 z-10">
+                    <h2 className="text-2xl md:text-3xl font-bold text-gray-800 text-center mb-8">
+                        {currentQuizCard.front}
+                    </h2>
+
+                    {/* Options Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {currentQuizCard.options ? currentQuizCard.options.map((opt, i) => {
+                            // Determine button color based on state
+                            let btnClass = "bg-gray-50 border-gray-200 text-gray-700 hover:border-blue-400 hover:bg-blue-50";
+                            
+                            if (activeQuiz.isRevealed) {
+                                if (opt === currentQuizCard.back) btnClass = "bg-green-100 border-green-500 text-green-800 font-bold"; // The right answer
+                                else if (selectedOption === opt) btnClass = "bg-red-100 border-red-500 text-red-800 line-through"; // User picked wrong
+                                else btnClass = "bg-gray-100 border-gray-200 text-gray-400 opacity-50"; // Unpicked wrong answer
+                            } else if (selectedOption === opt) {
+                                btnClass = "bg-blue-500 border-blue-600 text-white font-bold shadow-md"; // User selected this
+                            }
+
+                            return (
+                                <button 
+                                    key={i} 
+                                    disabled={isHost || activeQuiz.isRevealed} 
+                                    onClick={() => setSelectedOption(opt)}
+                                    className={`p-4 rounded-xl border-2 transition-all duration-200 text-left ${btnClass} ${isHost ? 'cursor-default' : ''}`}
+                                >
+                                    <div className="flex justify-between items-center">
+                                        <span>{opt}</span>
+                                        {activeQuiz.isRevealed && opt === currentQuizCard.back && <FaCheckIcon className="text-green-600" />}
+                                        {activeQuiz.isRevealed && selectedOption === opt && opt !== currentQuizCard.back && <FaTimesCircle className="text-red-500" />}
+                                    </div>
+                                </button>
+                            );
+                        }) : (
+                            <p className="col-span-full text-center text-gray-400">No options provided for this card. Host must reveal answer.</p>
+                        )}
+                    </div>
+                    
+                    {/* Viewers wait, Host controls */}
+                    {!isHost && !activeQuiz.isRevealed && (
+                         <p className="text-center text-gray-400 text-sm mt-6 animate-pulse">Waiting for host to reveal answer...</p>
+                    )}
+                </div>
+
+                {isHost && (
+                    <div className="absolute bottom-32 flex gap-4 bg-black/60 backdrop-blur-md p-4 rounded-3xl border border-white/10 shadow-2xl z-20">
+                        {!activeQuiz.isRevealed ? (
+                            <button onClick={revealAnswer} className="px-6 py-3 bg-green-500 text-white rounded-xl font-bold hover:bg-green-400 transition flex items-center gap-2">
+                                <FaCheck /> Reveal Answer
+                            </button>
+                        ) : (
+                            <button onClick={nextQuizQuestion} className="px-6 py-3 bg-blue-500 text-white rounded-xl font-bold hover:bg-blue-400 transition flex items-center gap-2">
+                                Next Question <FaPlay />
+                            </button>
+                        )}
+                        <div className="w-px bg-white/20 mx-2"></div>
+                        <button onClick={stopLiveQuiz} className="px-4 py-3 bg-red-500/20 hover:bg-red-500 text-white rounded-xl font-bold transition flex items-center gap-2">
+                            End Quiz
+                        </button>
+                    </div>
+                )}
+            </div>
+
+        ) : activeResource ? (
           <div className="w-full h-full flex flex-col bg-gray-900">
             <div className="h-12 bg-black/50 backdrop-blur flex items-center justify-between px-6 text-white border-b border-white/10 relative z-30">
               <span className="font-bold flex items-center gap-2"><FaDesktop className="text-blue-400"/> Presenting: {activeResource.name}</span>
@@ -560,7 +779,6 @@ export default function RoomMessages({ room, onBack }) {
         ) : (
           <>
             {isDummy ? (
-                // ADDED POSTER HERE AS WELL
                 <video src={room.previewURL} poster={room.fallbackImage || null} autoPlay muted loop playsInline className="w-full h-full object-cover" />
             ) : isHost ? ( 
                 <video ref={localVideoRef} autoPlay muted playsInline className="w-full h-full object-cover" /> 
@@ -576,7 +794,7 @@ export default function RoomMessages({ room, onBack }) {
         <BreakOverlay />
         <DistractionAlert />
         
-        {streamLive && timerData.mode === 'work' && (
+        {streamLive && timerData.mode === 'work' && !activeQuiz && (
             <div className="absolute top-20 left-6 z-20 flex gap-2">
                 <div className="bg-black/40 backdrop-blur-md px-3 py-1.5 rounded-full border border-green-500/30 text-green-400 text-xs font-bold flex items-center gap-2 shadow-lg">
                     <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div> Focus Mode On
@@ -613,6 +831,11 @@ export default function RoomMessages({ room, onBack }) {
             )}
             {isHost && (
               <>
+                {!activeQuiz && (
+                  <ControlButton onClick={() => setShowQuizPicker(true)} icon={<FaBrain className="text-purple-400" />} label="Live Quiz" variant="default" />
+                )}
+                <div className="w-px bg-white/20 mx-1"></div>
+
                 <ControlButton onClick={() => !timerData.isConfigured && setShowTimerModal(true)} disabled={timerData.isConfigured || timerData.mode === 'break'} icon={<FaStopwatch />} label={timerData.isConfigured ? "Timer Active" : "Pomodoro"} variant={timerData.isConfigured ? "success" : "primary"} />
                 <div className="w-px bg-white/20 mx-1"></div>
                 <ControlButton onClick={toggleCamera} disabled={!streamLive || timerData.mode === 'break'} icon={camOn ? <FaVideo /> : <FaVideoSlash />} label={camOn ? "Cam Off" : "Cam On"} variant={camOn ? "default" : "danger"} />
@@ -625,17 +848,21 @@ export default function RoomMessages({ room, onBack }) {
                 <div className="w-px bg-white/20 mx-1"></div>
               </>
             )}
+            <ControlButton onClick={() => toggleSidePanel("tasks")} active={showTasks} icon={<FaTasks />} label="Goals" variant="default" />
             <ControlButton onClick={() => toggleSidePanel("files")} active={showFiles} icon={<FaPaperclip />} label="Resources" variant="default" />
             <ControlButton onClick={() => toggleSidePanel("chat")} active={showChat} icon={<FaPaperPlane />} label="Chat" variant="default" />
             {isHost && <ControlButton onClick={handleEndRoom} icon={<FaPowerOff />} label="End Room" variant="danger" />}
         </div>
       </div>
 
-      {(showChat || showFiles) && (
+      {(showChat || showFiles || showTasks) && (
         <div className="w-96 bg-white flex flex-col shadow-2xl border-l border-gray-100 relative z-20">
             {showChat && (
             <>
-                <div className="p-5 border-b border-gray-100 bg-white"><h3 className="text-xl font-bold text-gray-800">{room.name}</h3></div>
+                <div className="p-5 border-b border-gray-100 bg-white flex justify-between items-center">
+                    <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2"><FaPaperPlane /> Room Chat</h3>
+                    <button onClick={() => setShowChat(false)} className="text-gray-400 hover:text-gray-600"><FaTimes /></button>
+                </div>
                 <div className="flex-1 p-5 overflow-y-auto space-y-4 bg-gray-50/50">
                 {messages.map(m => (
                     <div key={m.id} className={`flex flex-col ${m.sender === user.email ? "items-end" : "items-start"}`}>
@@ -655,7 +882,7 @@ export default function RoomMessages({ room, onBack }) {
             <>
                 <div className="p-5 border-b border-gray-100 bg-white flex justify-between items-center">
                 <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2"><FaPaperclip /> Resources</h3>
-                <button onClick={() => { setShowFiles(false); setShowChat(true); }} className="text-gray-400 hover:text-gray-600"><FaTimes /></button>
+                <button onClick={() => setShowFiles(false)} className="text-gray-400 hover:text-gray-600"><FaTimes /></button>
                 </div>
                 <div className="flex-1 p-5 overflow-y-auto space-y-3 bg-gray-50/50">
                 {isHost && resources.filter(r => !r.approved).length > 0 && (
@@ -716,10 +943,79 @@ export default function RoomMessages({ room, onBack }) {
                 </div>
             </>
             )}
+
+            {showTasks && (
+            <>
+                <div className="p-5 border-b border-gray-100 bg-white flex justify-between items-center">
+                    <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2"><FaTasks /> Session Goals</h3>
+                    <button onClick={() => setShowTasks(false)} className="text-gray-400 hover:text-gray-600"><FaTimes /></button>
+                </div>
+                
+                <div className="px-5 py-4 bg-gray-50 border-b border-gray-100">
+                    <div className="flex justify-between text-xs font-extrabold text-gray-500 uppercase tracking-wider mb-2">
+                        <span>Progress</span>
+                        <span className={taskProgressPercent === 100 ? "text-green-600" : "text-blue-600"}>
+                            {taskProgressPercent}%
+                        </span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-2.5 overflow-hidden">
+                        <div 
+                            className={`h-full rounded-full transition-all duration-500 ${taskProgressPercent === 100 ? 'bg-green-500' : 'bg-blue-500'}`} 
+                            style={{ width: `${taskProgressPercent}%` }}
+                        ></div>
+                    </div>
+                </div>
+
+                <div className="flex-1 p-5 overflow-y-auto space-y-3 bg-gray-50/50">
+                    {tasks.length === 0 ? (
+                        <div className="text-center text-gray-400 mt-10">
+                            <FaTasks className="mx-auto text-3xl mb-3 text-gray-300" />
+                            <p className="text-sm font-medium">No goals set for this session.</p>
+                        </div>
+                    ) : (
+                        tasks.map(task => (
+                            <div key={task.id} className={`bg-white p-4 rounded-xl shadow-sm border group transition-all flex items-start gap-3 ${task.completed ? 'border-green-200 bg-green-50' : 'border-gray-200 hover:border-blue-300'}`}>
+                                <input 
+                                    type="checkbox" 
+                                    checked={task.completed}
+                                    onChange={() => handleToggleTask(task.id, task.completed)}
+                                    className="mt-1 w-4 h-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer"
+                                />
+                                <div className="flex-1">
+                                    <p className={`text-sm font-semibold transition-all ${task.completed ? 'text-gray-400 line-through' : 'text-gray-800'}`}>
+                                        {task.text}
+                                    </p>
+                                    <p className="text-[10px] text-gray-400 mt-1 font-medium">Added by {task.addedBy}</p>
+                                </div>
+                                {(isHost || task.addedBy === (user?.email?.split("@")[0] || user?.displayName)) && (
+                                    <button onClick={() => handleDeleteTask(task.id)} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        <FaTrash size={13} />
+                                    </button>
+                                )}
+                            </div>
+                        ))
+                    )}
+                </div>
+                <form onSubmit={handleAddTask} className="p-4 border-t border-gray-100 bg-white flex gap-2">
+                    <input 
+                        value={newTaskText} 
+                        onChange={e => setNewTaskText(e.target.value)} 
+                        placeholder="Add a new goal..." 
+                        className="flex-1 px-4 py-2.5 border border-gray-200 rounded-xl bg-gray-50 outline-none text-sm focus:border-blue-400 focus:ring-1 focus:ring-blue-200 transition-all" 
+                    />
+                    <button className="bg-gradient-to-r from-gray-800 to-gray-900 text-white px-5 rounded-xl shadow-md hover:shadow-lg transition-transform active:scale-95 font-bold text-sm">Add</button>
+                </form>
+            </>
+            )}
         </div>
       )}
 
       <style>{`
+        .perspective-1000 { perspective: 1000px; }
+        .transform-style-3d { transform-style: preserve-3d; }
+        .backface-hidden { backface-visibility: hidden; }
+        .rotate-y-180 { transform: rotateY(180deg); }
+
         .animate-fadeIn { animation: fadeIn 0.5s ease-out; } @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         .animate-slideDown { animation: slideDown 0.5s cubic-bezier(0.16, 1, 0.3, 1); } @keyframes slideDown { from { opacity: 0; transform: translateY(-20px) translateX(-50%); } to { opacity: 1; transform: translateY(0) translateX(-50%); } }
         .animate-slideUp { animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1); } @keyframes slideUp { from { opacity: 0; transform: translateY(40px) translateX(-50%); } to { opacity: 1; transform: translateY(0) translateX(-50%); } }
