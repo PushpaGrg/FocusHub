@@ -14,7 +14,8 @@ import CreateStudyBuddyRoom from "./pages/CreateStudyBuddyRoom";
 import EditProfile from "./pages/EditProfile";
 import CreateRoom from "./pages/CreateRoom";
 import UserStatistics from "./pages/UserStatistics";
-import FlashcardHub from "./pages/FlashcardHub"; // <-- THIS WAS MISSING!
+import FlashcardHub from "./pages/FlashcardHub"; 
+import AdminDashboard from "./pages/AdminDashboard";
 
 export default function App() {
   const [user, setUser] = useState(undefined);
@@ -31,6 +32,7 @@ export default function App() {
   const [pendingRoomId, setPendingRoomId] = useState(null);
   const [showJoinLoginModal, setShowJoinLoginModal] = useState(false);
   const location = useLocation();
+  const [viewingAdmin, setViewingAdmin] = useState(false);
 
   // --- REAL-TIME PROFILE SYNC ---
   useEffect(() => {
@@ -262,6 +264,25 @@ export default function App() {
   if (selectedRoom)
     return <RoomMessages room={selectedRoom} user={profile} onBack={() => setSelectedRoom(null)} />;
 
+  if (viewingAdmin)
+    return <AdminDashboard user={profile} onBack={() => setViewingAdmin(false)} />;
+
+  // --- ENFORCE BAN RULE ---
+  if (profile?.isBanned) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-red-50 text-center p-6">
+        <div className="w-24 h-24 bg-red-100 text-red-600 rounded-full flex items-center justify-center text-4xl mb-6 shadow-lg border-4 border-white">
+            ⛔
+        </div>
+        <h1 className="text-3xl font-black text-gray-800 mb-2">Account Suspended</h1>
+        <p className="text-gray-500 max-w-md mb-8">Your account has been banned by an administrator for violating community guidelines. You can no longer access FocusHub.</p>
+        <button onClick={handleLogout} className="px-6 py-3 bg-gray-900 text-white font-bold rounded-xl hover:bg-gray-800 transition shadow-lg">
+            Sign Out
+        </button>
+      </div>
+    );
+  }
+
   return (
     <StudyRoomList
       user={profile}
@@ -271,7 +292,8 @@ export default function App() {
       onCreateRoom={handleCreateRoom}
       onOpenStudyBuddyRoom={handleCreateStudyBuddy}
       onShowStats={() => setViewingStats(true)} 
-      onShowFlashcards={() => setViewingFlashcards(true)} // <-- THIS TRIGGERS THE RENDER
+      onShowFlashcards={() => setViewingFlashcards(true)} 
+      onShowAdmin={() => setViewingAdmin(true)} // <-- ADD THIS
     />
   );
 }

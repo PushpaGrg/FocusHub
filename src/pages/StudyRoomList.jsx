@@ -139,7 +139,8 @@ const LiveEqualizer = () => (
   </div>
 );
 
-export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProfile, onCreateRoom, onOpenStudyBuddyRoom, onShowStats, onShowFlashcards }) {
+// ---> FIX 1: Added onShowAdmin to the props list here! <---
+export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProfile, onCreateRoom, onOpenStudyBuddyRoom, onShowStats, onShowFlashcards, onShowAdmin }) {
   // States
   const [rooms, setRooms] = useState([]);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -184,12 +185,12 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
   const username = user?.username || user?.email?.split("@")[0];
   const currentUserId = firebaseUser?.uid || user?.uid;
   
-  // 1. Combine real rooms with dummy rooms
+  // Combine real rooms with dummy rooms
   const allRooms = showMyRooms 
     ? rooms.filter(room => room.createdBy === currentUserId)
     : [...rooms, ...DUMMY_ROOMS];
 
-  // 2. Filter by search and category
+  // Filter by search and category
   const filteredRooms = allRooms.filter(room => {
     const matchesSearch = room.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
                           (room.description && room.description.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -230,7 +231,6 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
               />
             )}
 
-            {/* NEW FLASHCARD BUTTON */}
             <NavIconButton 
               onClick={onShowFlashcards} 
               icon={<FaBookOpen />} 
@@ -283,12 +283,24 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                   >
                     <FaUser className="text-lg" /> Edit Profile
                   </button>
+
+                  {/* ---> FIX 2: Admin button properly separated from Logout button <--- */}
+                  {true && (
+                    <button
+                      onClick={() => { onShowAdmin(); setIsDropdownOpen(false); }}
+                      className="flex items-center gap-3 w-full text-left px-5 py-3 hover:bg-purple-50 text-purple-600 transition text-sm font-bold border-t border-gray-100"
+                    >
+                      <FaCrown className="text-lg" /> Admin Panel
+                    </button>
+                  )}
+
                   <button
                     onClick={() => { onLogout(); setIsDropdownOpen(false); }}
                     className="flex items-center gap-3 w-full text-left px-5 py-3 hover:bg-red-50 text-red-500 hover:text-red-600 transition border-t border-gray-100 text-sm font-medium"
                   >
                     <FaSignOutAlt className="text-lg" /> Logout
                   </button>
+
                 </div>
               )}
             </div>
