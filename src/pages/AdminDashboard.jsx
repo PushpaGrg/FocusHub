@@ -4,10 +4,9 @@ import { db } from "../firebase";
 import { doc, onSnapshot, setDoc, collection, query, deleteDoc, updateDoc } from "firebase/firestore";
 import { 
   FaArrowLeft, FaPlus, FaTrash, FaImage, FaUsers, FaVideo, 
-  FaCrown, FaCheckCircle, FaExclamationTriangle, FaBan, FaUnlock, FaInfoCircle, FaTimes 
+  FaCrown, FaCheckCircle, FaExclamationTriangle, FaBan, FaUnlock, FaInfoCircle, FaTimes, FaFlag 
 } from "react-icons/fa";
 
-// --- CUSTOM TOAST NOTIFICATION (Replaces alert()) ---
 const Toast = ({ message, type, onClose }) => {
   useEffect(() => {
     const timer = setTimeout(onClose, 3000);
@@ -23,7 +22,6 @@ const Toast = ({ message, type, onClose }) => {
   );
 };
 
-// --- CUSTOM CONFIRMATION MODAL (Replaces window.confirm()) ---
 const ConfirmModal = ({ title, message, onConfirm, onCancel, isDanger = true }) => (
   <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
     <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center border border-gray-200">
@@ -45,7 +43,7 @@ const ConfirmModal = ({ title, message, onConfirm, onCancel, isDanger = true }) 
 export default function AdminDashboard({ user, onBack }) {
   const [activeTab, setActiveTab] = useState("cms"); 
   const [confirmDialog, setConfirmDialog] = useState(null); 
-  const [toast, setToast] = useState(null); // Custom Alerts
+  const [toast, setToast] = useState(null);
 
   const [slides, setSlides] = useState([]);
   const [newSlide, setNewSlide] = useState({ type: "image", url: "", title: "", subtitle: "" });
@@ -56,7 +54,6 @@ export default function AdminDashboard({ user, onBack }) {
 
   const triggerToast = (msg, type = "info") => setToast({ message: msg, type });
 
-  // Security Check: AMS-NF-1.0
   if (user?.role !== "admin") {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 text-gray-800 font-sans">
@@ -68,7 +65,6 @@ export default function AdminDashboard({ user, onBack }) {
     );
   }
 
-  // --- FETCH DATA ---
   useEffect(() => {
     if (activeTab === "cms") {
       const docRef = doc(db, "app_config", "homepage");
@@ -98,7 +94,6 @@ export default function AdminDashboard({ user, onBack }) {
     }
   }, [activeTab]);
 
-  // --- CMS HANDLERS ---
   const saveToDatabase = async (updatedSlides) => {
     setIsSaving(true);
     try { 
@@ -130,10 +125,7 @@ export default function AdminDashboard({ user, onBack }) {
         onCancel: () => setConfirmDialog(null)
     });
   };
-
-  // --- MODERATION HANDLERS ---
   
-  // AMS-F-1.1: Delete Inappropriate Content (Rooms)
   const triggerForceDeleteRoom = (roomId) => {
     setConfirmDialog({
         title: "Delete Room?",
@@ -151,7 +143,6 @@ export default function AdminDashboard({ user, onBack }) {
     });
   };
 
-  // AMS-F-1.2: Ban or Unban Users
   const triggerToggleBanUser = (userId, currentBanStatus, username) => {
     if (userId === user.uid) return triggerToast("You cannot ban yourself!", "error");
 
@@ -162,7 +153,8 @@ export default function AdminDashboard({ user, onBack }) {
         isDanger: !currentBanStatus, 
         onConfirm: async () => {
             try { 
-                await updateDoc(doc(db, "users", userId), { isBanned: !currentBanStatus }); 
+                // Unflag them if they are unbanned
+                await updateDoc(doc(db, "users", userId), { isBanned: !currentBanStatus, isFlagged: false, spamStrikes: 0 }); 
                 triggerToast(`User successfully ${actionText.toLowerCase()}ned.`, "success");
             } 
             catch (error) { 
@@ -175,13 +167,19 @@ export default function AdminDashboard({ user, onBack }) {
     });
   };
 
+  const triggerClearFlags = async (userId) => {
+      try { 
+          await updateDoc(doc(db, "users", userId), { isFlagged: false, spamStrikes: 0 }); 
+          triggerToast("User warnings cleared.", "success");
+      } 
+      catch (error) { triggerToast("Error clearing warnings.", "error"); }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row font-sans relative">
       
-      {/* Global Toast Notification */}
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
 
-      {/* Render Confirmation Modal if active (AMS-UR-1.0) */}
       {confirmDialog && (
           <ConfirmModal 
             title={confirmDialog.title} 
@@ -192,7 +190,6 @@ export default function AdminDashboard({ user, onBack }) {
           />
       )}
 
-      {/* --- SIDEBAR NAVIGATION --- */}
       <div className="w-full md:w-64 bg-gray-900 text-white p-6 flex flex-col z-10 relative">
         <h2 className="text-2xl font-black mb-8 bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent flex items-center gap-2">
             <FaCrown /> Admin Panel
@@ -213,10 +210,8 @@ export default function AdminDashboard({ user, onBack }) {
         </button>
       </div>
 
-      {/* --- MAIN CONTENT AREA --- */}
       <div className="flex-1 p-8 overflow-y-auto">
         
-        {/* TAB 1: HOMEPAGE CMS */}
         {activeTab === "cms" && (
             <div className="animate-fadeIn">
                 <h1 className="text-3xl font-black text-gray-800 mb-2">Homepage CMS</h1>
@@ -274,7 +269,7 @@ export default function AdminDashboard({ user, onBack }) {
             </div>
         )}
 
-        {/* TAB 2: USER MANAGEMENT */}
+        {/* TAB 2: USER MANAGEMENT WITH SPAM/REPORT HIGHLIGHTING */}
         {activeTab === "users" && (
             <div className="animate-fadeIn">
                 <h1 className="text-3xl font-black text-gray-800 mb-2">User Management</h1>
@@ -296,11 +291,14 @@ export default function AdminDashboard({ user, onBack }) {
                                 <tr><td colSpan="5" className="p-8 text-center text-gray-400">No users found.</td></tr>
                             ) : (
                                 allUsers.map((u) => (
-                                    <tr key={u.id} className={`transition ${u.isBanned ? 'bg-red-50/50' : 'hover:bg-gray-50'}`}>
+                                    <tr key={u.id} className={`transition ${u.isBanned ? 'bg-red-50/50' : u.isFlagged ? 'bg-orange-50/50 border-l-4 border-l-orange-500' : 'hover:bg-gray-50'}`}>
                                         <td className="p-4 flex items-center gap-3">
-                                            <img src={u.photoBase64 || "https://ui-avatars.com/api/?name=" + u.username} className={`w-10 h-10 rounded-full object-cover ${u.isBanned ? 'grayscale opacity-50' : 'bg-gray-200'}`} alt="avatar" />
+                                            <div className="relative">
+                                                <img src={u.photoBase64 || "https://ui-avatars.com/api/?name=" + u.username} className={`w-10 h-10 rounded-full object-cover ${u.isBanned ? 'grayscale opacity-50' : 'bg-gray-200'}`} alt="avatar" />
+                                                {u.isFlagged && !u.isBanned && <div className="absolute -top-1 -right-1 w-3 h-3 bg-orange-500 rounded-full animate-ping"></div>}
+                                            </div>
                                             <div>
-                                                <span className={`font-bold ${u.isBanned ? 'text-gray-400 line-through' : 'text-gray-800'}`}>{u.username || "Anonymous"}</span>
+                                                <span className={`font-bold ${u.isBanned ? 'text-gray-400 line-through' : u.isFlagged ? 'text-orange-700' : 'text-gray-800'}`}>{u.username || "Anonymous"}</span>
                                                 {u.role === "admin" && <FaCrown className="inline text-yellow-500 ml-1 mb-1" title="Admin"/>}
                                             </div>
                                         </td>
@@ -309,19 +307,31 @@ export default function AdminDashboard({ user, onBack }) {
                                         <td className="p-4 text-center">
                                             {u.isBanned ? (
                                                 <span className="px-2 py-1 bg-red-100 text-red-600 text-[10px] font-bold rounded uppercase flex items-center justify-center gap-1 w-max mx-auto"><FaBan /> Banned</span>
+                                            ) : u.isFlagged ? (
+                                                <span className="px-2 py-1 bg-orange-100 text-orange-600 text-[10px] font-bold rounded uppercase flex items-center justify-center gap-1 w-max mx-auto" title={`${u.spamStrikes || 0} Spam Strikes`}><FaFlag /> Flagged</span>
                                             ) : (
                                                 <span className="px-2 py-1 bg-green-100 text-green-600 text-[10px] font-bold rounded uppercase">Active</span>
                                             )}
                                         </td>
                                         <td className="p-4 text-right">
-                                            {u.role !== "admin" && (
-                                                <button 
-                                                    onClick={() => triggerToggleBanUser(u.id, u.isBanned, u.username)}
-                                                    className={`px-4 py-2 border rounded-lg font-bold text-xs transition shadow-sm flex items-center gap-2 ml-auto ${u.isBanned ? 'bg-white border-orange-200 text-orange-500 hover:bg-orange-500 hover:text-white' : 'bg-white border-red-200 text-red-500 hover:bg-red-500 hover:text-white'}`}
-                                                >
-                                                    {u.isBanned ? <><FaUnlock /> Unban</> : <><FaBan /> Ban</>}
-                                                </button>
-                                            )}
+                                            <div className="flex justify-end gap-2">
+                                                {u.isFlagged && !u.isBanned && (
+                                                    <button 
+                                                        onClick={() => triggerClearFlags(u.id)}
+                                                        className="px-3 py-2 bg-white border border-gray-200 text-gray-500 hover:bg-gray-100 rounded-lg font-bold text-xs transition shadow-sm"
+                                                    >
+                                                        Clear Warning
+                                                    </button>
+                                                )}
+                                                {u.role !== "admin" && (
+                                                    <button 
+                                                        onClick={() => triggerToggleBanUser(u.id, u.isBanned, u.username)}
+                                                        className={`px-4 py-2 border rounded-lg font-bold text-xs transition shadow-sm flex items-center gap-2 ${u.isBanned ? 'bg-white border-orange-200 text-orange-500 hover:bg-orange-500 hover:text-white' : 'bg-white border-red-200 text-red-500 hover:bg-red-500 hover:text-white'}`}
+                                                    >
+                                                        {u.isBanned ? <><FaUnlock /> Unban</> : <><FaBan /> Ban</>}
+                                                    </button>
+                                                )}
+                                            </div>
                                         </td>
                                     </tr>
                                 ))

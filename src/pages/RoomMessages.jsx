@@ -13,7 +13,7 @@ import {
   FaExclamationTriangle, FaPaperclip, FaLink, FaExternalLinkAlt, 
   FaTimes, FaPlus, FaCloudUploadAlt, FaFilePdf, FaImage, FaDownload, 
   FaDesktop, FaTrash, FaCheckCircle, FaClock, FaInfoCircle, FaMedal, FaStar,
-  FaTasks, FaBrain, FaPlay, FaCheckCircle as FaCheckIcon, FaTimesCircle
+  FaTasks, FaBrain, FaPlay, FaCheckCircle as FaCheckIcon, FaTimesCircle, FaFlag, FaCrown
 } from "react-icons/fa";
 const Peer = window.SimplePeer;
 import { useAuthState } from "react-firebase-hooks/auth";
@@ -141,6 +141,8 @@ const ControlButton = ({ onClick, icon, label, variant = "default", disabled = f
 export default function RoomMessages({ room, onBack }) {
   const [user] = useAuthState(auth);
   const [lastMessageTime, setLastMessageTime] = useState(0);
+  const [userProfile, setUserProfile] = useState(null); // --- NEW: Profile State for Role Fetching
+  
   if (!user || !room) return <div className="h-screen flex items-center justify-center text-white bg-gray-900">Loading...</div>;
 
   const isDummy = room?.isDummy;
@@ -175,16 +177,14 @@ export default function RoomMessages({ room, onBack }) {
   });
   const [showTimerModal, setShowTimerModal] = useState(false);
 
-  // --- MULTIPLAYER QUIZ STATE ---
   const [showQuizPicker, setShowQuizPicker] = useState(false);
   const [hostDecks, setHostDecks] = useState([]);
   const [activeQuiz, setActiveQuiz] = useState(null); 
   const [quizDeckData, setQuizDeckData] = useState(null); 
   
-  // Local Viewer State for Quiz Logic
   const [selectedOption, setSelectedOption] = useState(null);
-  const earnedQuizPoints = useRef(0); // Tracks points locally until they leave the room
-  const lastScoredIndex = useRef(-1); // Prevents giving points multiple times for the same question
+  const earnedQuizPoints = useRef(0); 
+  const lastScoredIndex = useRef(-1); 
 
   const [distractionCount, setDistractionCount] = useState(0);
   const [showDistractionAlert, setShowDistractionAlert] = useState(false);
@@ -211,11 +211,18 @@ export default function RoomMessages({ room, onBack }) {
     setConfirmDialog({ title, message, onConfirm: () => { action(); setConfirmDialog(null); }, onCancel: () => setConfirmDialog(null) });
   };
 
+  // --- NEW: Fetch full user profile so we know their role for the chat ---
+  useEffect(() => {
+    if(user?.uid) {
+        getDoc(doc(db, "users", user.uid)).then(docSnap => {
+            if(docSnap.exists()) setUserProfile(docSnap.data());
+        });
+    }
+  }, [user]);
+
   const generateSessionReport = async () => {
     const endTime = Date.now();
     const durationMinutes = Math.max(1, Math.floor((endTime - sessionStartTime.current) / 1000 / 60));
-    
-    // Calculate Score with Quiz Points
     let score = (durationMinutes * 10) + (uploadsCount.current * 50) + earnedQuizPoints.current - (distractionCount * 20);
     if (score < 0) score = 0;
 
@@ -223,7 +230,7 @@ export default function RoomMessages({ room, onBack }) {
     if (distractionCount === 0 && durationMinutes > 10) badges.push("Zen Master");
     if (uploadsCount.current > 0) badges.push("Scholar");
     if (durationMinutes > 30) badges.push("Iron Will");
-    if (earnedQuizPoints.current >= 100) badges.push("Quiz Whiz"); // NEW BADGE
+    if (earnedQuizPoints.current >= 100) badges.push("Quiz Whiz");
 
     try {
       const userRef = doc(db, "users", user.uid);
@@ -267,7 +274,24 @@ export default function RoomMessages({ room, onBack }) {
     }
   };
 
-  // --- Main Data Sync (Includes Quiz State) ---
+  useEffect(() => {
+    if (timerData.mode !== 'work' || !streamLive) {
+      alertSound.pause(); alertSound.currentTime = 0; return;
+    }
+    const handleVisibilityChange = () => {
+      if (!streamLive) return; 
+      if (document.hidden) {
+        setDistractionCount(prev => prev + 1);
+        alertSound.currentTime = 0; alertSound.play().catch(e => console.warn(e));
+      } else {
+        alertSound.pause(); alertSound.currentTime = 0;
+        setShowDistractionAlert(true); setTimeout(() => setShowDistractionAlert(false), 3000); 
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => { document.removeEventListener("visibilitychange", handleVisibilityChange); alertSound.pause(); alertSound.currentTime = 0; };
+  }, [timerData.mode, streamLive]); 
+
   useEffect(() => {
     if (!room?.id) return;
     
@@ -277,15 +301,8 @@ export default function RoomMessages({ room, onBack }) {
         if (data.timer) setTimerData(data.timer);
         if (data.activeResource) setActiveResource(data.activeResource); else setActiveResource(null);
         if (!isHost && data.isLive !== undefined) setStreamLive(data.isLive);
-        
-        // Handle Quiz State
-        if (data.activeQuiz) {
-            setActiveQuiz(data.activeQuiz);
-        } else {
-            setActiveQuiz(null);
-            setQuizDeckData(null);
-            setSelectedOption(null); // Reset viewer state if quiz ends
-        }
+        if (data.activeQuiz) { setActiveQuiz(data.activeQuiz); } 
+        else { setActiveQuiz(null); setQuizDeckData(null); setSelectedOption(null); }
       } else if (!isDummy) {
         triggerToast("Room ended by host", "info");
         setTimeout(onBack, 2000);
@@ -303,14 +320,13 @@ export default function RoomMessages({ room, onBack }) {
     return () => { roomUnsub(); filesUnsub(); tasksUnsub(); };
   }, [room.id, isHost, isDummy]);
 
-  // --- QUIZ LOGIC ---
   useEffect(() => {
       const fetchDeck = async () => {
           if (activeQuiz?.deckId && (!quizDeckData || quizDeckData.id !== activeQuiz.deckId)) {
               try {
                   const snap = await getDoc(doc(db, "flashcard_decks", activeQuiz.deckId));
                   if (snap.exists()) setQuizDeckData({ id: snap.id, ...snap.data() });
-              } catch (err) { console.error("Error loading deck:", err); }
+              } catch (err) {}
           }
       };
       fetchDeck();
@@ -329,12 +345,9 @@ export default function RoomMessages({ room, onBack }) {
       fetchHostDecks();
   }, [isHost, showQuizPicker, user.uid]);
 
-  // Detect when Host reveals answer & calculate Viewer score
   useEffect(() => {
       if (activeQuiz?.isRevealed && selectedOption && quizDeckData) {
           const currentCard = quizDeckData.cards[activeQuiz.currentIndex];
-          
-          // Ensure we don't score the same question twice
           if (lastScoredIndex.current !== activeQuiz.currentIndex) {
               if (selectedOption === currentCard.back) {
                   earnedQuizPoints.current += 50;
@@ -347,17 +360,12 @@ export default function RoomMessages({ room, onBack }) {
       }
   }, [activeQuiz?.isRevealed, selectedOption, quizDeckData, activeQuiz?.currentIndex]);
 
-  // Reset viewer selection when the question changes
-  useEffect(() => {
-      setSelectedOption(null);
-  }, [activeQuiz?.currentIndex]);
+  useEffect(() => { setSelectedOption(null); }, [activeQuiz?.currentIndex]);
 
   const startLiveQuiz = async (deck) => {
       if (!deck.cards || deck.cards.length === 0) return triggerToast("Deck is empty!", "error");
       try {
-          await updateDoc(roomRef, { 
-              activeQuiz: { deckId: deck.id, currentIndex: 0, isRevealed: false } 
-          });
+          await updateDoc(roomRef, { activeQuiz: { deckId: deck.id, currentIndex: 0, isRevealed: false } });
           setShowQuizPicker(false);
       } catch (err) { triggerToast("Failed to start quiz", "error"); }
   };
@@ -370,15 +378,9 @@ export default function RoomMessages({ room, onBack }) {
   const nextQuizQuestion = async () => {
       if (!isHost || !quizDeckData || !activeQuiz) return;
       if (activeQuiz.currentIndex < quizDeckData.cards.length - 1) {
-          try {
-              await updateDoc(roomRef, { 
-                  "activeQuiz.currentIndex": activeQuiz.currentIndex + 1,
-                  "activeQuiz.isRevealed": false
-              });
-          } catch(err){}
+          try { await updateDoc(roomRef, { "activeQuiz.currentIndex": activeQuiz.currentIndex + 1, "activeQuiz.isRevealed": false }); } catch(err){}
       } else {
-          stopLiveQuiz();
-          triggerToast("Quiz Finished!", "success");
+          stopLiveQuiz(); triggerToast("Quiz Finished!", "success");
       }
   };
 
@@ -386,7 +388,6 @@ export default function RoomMessages({ room, onBack }) {
       if (!isHost || !activeQuiz) return;
       try { await updateDoc(roomRef, { "activeQuiz.isRevealed": true }); } catch (err) {}
   };
-
 
   useEffect(() => {
     if (isHost && !activeResource && !activeQuiz && localStreamRef.current && localVideoRef.current) {
@@ -510,10 +511,25 @@ export default function RoomMessages({ room, onBack }) {
 
   useEffect(() => { if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: "smooth" }); }, [messages, showChat]);
 
+  // --- MODIFIED: CHAT HANDLER SAVES ROLES SECURELY ---
   const handleSend = async (e) => {
     e.preventDefault();
     if (!newMsg.trim()) return;
-    if (containsSpam(newMsg)) { triggerToast("Spam detected.", "error"); setNewMsg(""); return; }
+    
+    if (containsSpam(newMsg)) { 
+        triggerToast("Spam detected! Repeated offenses will result in a ban.", "error"); 
+        setNewMsg(""); 
+        try {
+            const userRef = doc(db, "users", user.uid);
+            await updateDoc(userRef, { spamStrikes: increment(1) });
+            const userSnap = await getDoc(userRef);
+            if (userSnap.data().spamStrikes >= 3) {
+                await updateDoc(userRef, { isFlagged: true });
+            }
+        } catch(err) { console.error("Error logging spam:", err) }
+        return; 
+    }
+
     const now = Date.now();
     const COOLDOWN_MS = 2000; 
 
@@ -525,14 +541,51 @@ export default function RoomMessages({ room, onBack }) {
 
     try {
         setLastMessageTime(now);
+        
+        // Null-safe assignment to prevent crashes for guests
+        let safeName = "Student";
+        if (userProfile?.username) safeName = userProfile.username;
+        else if (user?.displayName) safeName = user.displayName;
+        else if (user?.email) safeName = user.email.split("@")[0];
+
+        const safeEmail = user?.email || "hidden-email@student.com";
+        const safeRole = userProfile?.role || "student";
+
+        // Denormalize user data into the message document
         await addDoc(collection(db, "messages"), { 
             roomId: room.id, 
-            sender: user.email, 
+            sender: safeEmail, 
+            senderName: safeName,
+            senderRole: safeRole,
+            isHost: isHost || false,
             text: newMsg.trim(), 
             createdAt: serverTimestamp() 
         });
         setNewMsg("");
-    } catch (err) { triggerToast("Failed to send message.", "error"); }
+    } catch (err) { 
+        console.error(err);
+        triggerToast("Failed to send message.", "error"); 
+    }
+  };
+
+  const handleReportUser = async (reportedEmail) => {
+      if (reportedEmail === user?.email) return triggerToast("You cannot report yourself.", "error");
+      try {
+          await addDoc(collection(db, "reports"), {
+              reportedEmail: reportedEmail,
+              reportedBy: user?.email || "guest",
+              roomId: room.id,
+              timestamp: serverTimestamp()
+          });
+          
+          const q = query(collection(db, "users"), where("email", "==", reportedEmail));
+          const snapshot = await getDocs(q);
+          if (!snapshot.empty) {
+              const reportedUserId = snapshot.docs[0].id;
+              await updateDoc(doc(db, "users", reportedUserId), { isFlagged: true });
+          }
+          triggerToast("User reported to Admin.", "success");
+      } catch (err) { triggerToast("Failed to report user.", "error"); }
   };
 
   const handleStartStream = async () => {
@@ -623,6 +676,22 @@ export default function RoomMessages({ room, onBack }) {
     return () => clearInterval(interval);
   }, [isHost, streamLive, timerData.mode]);
 
+  useEffect(() => {
+    if (!room?.id) return;
+    const reactionsQuery = query(collection(db, "reactions"), where("roomId", "==", room.id), orderBy("timestamp", "desc"));
+    return onSnapshot(reactionsQuery, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type === "added") {
+          const reactionData = change.doc.data();
+          setReactions(prev => [...prev, { id: change.doc.id, emoji: reactionData.emoji }]);
+          setTimeout(() => setReactions(prev => prev.filter(r => r.id !== change.doc.id)), 2000);
+        }
+      });
+    });
+  }, [room?.id]);
+
+  const sendReaction = async (emoji) => { try { await addDoc(collection(db, "reactions"), { roomId: room.id, emoji, timestamp: serverTimestamp(), senderId: user?.uid || "guest" }); } catch (err) {} };
+
   const BreakOverlay = () => {
     if (timerData.mode !== 'break') return null;
     return (
@@ -652,7 +721,6 @@ export default function RoomMessages({ room, onBack }) {
       setShowTasks(panel === "tasks" ? !showTasks : false);
   };
 
-  // Safe checks for rendering the quiz
   const currentQuizCard = quizDeckData?.cards?.[activeQuiz?.currentIndex];
 
   return (
@@ -663,7 +731,6 @@ export default function RoomMessages({ room, onBack }) {
         
         {sessionReport && <SessionReportModal stats={sessionReport} onClose={() => { setSessionReport(null); if(isExiting) onBack(); }} />}
         
-        {/* --- LIVE QUIZ PICKER MODAL (Host Only) --- */}
         {showQuizPicker && isHost && (
             <div className="absolute inset-0 z-[300] bg-black/80 backdrop-blur-md flex items-center justify-center animate-fadeIn">
                 <div className="bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl">
@@ -690,9 +757,7 @@ export default function RoomMessages({ room, onBack }) {
             </div>
         )}
 
-        {/* --- MAIN VIEW LOGIC --- */}
         {activeQuiz && currentQuizCard ? (
-            /* LIVE MULTIPLAYER QUIZ VIEW */
             <div className="flex-1 bg-gray-900 flex flex-col items-center justify-center p-8 relative overflow-hidden">
                 <div className="absolute top-6 flex flex-col items-center z-10">
                     <div className="bg-purple-600 text-white px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest animate-pulse shadow-lg shadow-purple-500/50 mb-2">
@@ -708,18 +773,16 @@ export default function RoomMessages({ room, onBack }) {
                         {currentQuizCard.front}
                     </h2>
 
-                    {/* Options Grid */}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {currentQuizCard.options ? currentQuizCard.options.map((opt, i) => {
-                            // Determine button color based on state
                             let btnClass = "bg-gray-50 border-gray-200 text-gray-700 hover:border-blue-400 hover:bg-blue-50";
                             
                             if (activeQuiz.isRevealed) {
-                                if (opt === currentQuizCard.back) btnClass = "bg-green-100 border-green-500 text-green-800 font-bold"; // The right answer
-                                else if (selectedOption === opt) btnClass = "bg-red-100 border-red-500 text-red-800 line-through"; // User picked wrong
-                                else btnClass = "bg-gray-100 border-gray-200 text-gray-400 opacity-50"; // Unpicked wrong answer
+                                if (opt === currentQuizCard.back) btnClass = "bg-green-100 border-green-500 text-green-800 font-bold"; 
+                                else if (selectedOption === opt) btnClass = "bg-red-100 border-red-500 text-red-800 line-through"; 
+                                else btnClass = "bg-gray-100 border-gray-200 text-gray-400 opacity-50"; 
                             } else if (selectedOption === opt) {
-                                btnClass = "bg-blue-500 border-blue-600 text-white font-bold shadow-md"; // User selected this
+                                btnClass = "bg-blue-500 border-blue-600 text-white font-bold shadow-md"; 
                             }
 
                             return (
@@ -741,9 +804,8 @@ export default function RoomMessages({ room, onBack }) {
                         )}
                     </div>
                     
-                    {/* Viewers wait, Host controls */}
                     {!isHost && !activeQuiz.isRevealed && (
-                         <p className="text-center text-gray-400 text-sm mt-6 animate-pulse">Waiting for host to reveal answer...</p>
+                         <p className="text-center text-gray-400 text-sm mt-6 animate-pulse">Select an answer and wait for host to reveal...</p>
                     )}
                 </div>
 
@@ -751,7 +813,7 @@ export default function RoomMessages({ room, onBack }) {
                     <div className="absolute bottom-32 flex gap-4 bg-black/60 backdrop-blur-md p-4 rounded-3xl border border-white/10 shadow-2xl z-20">
                         {!activeQuiz.isRevealed ? (
                             <button onClick={revealAnswer} className="px-6 py-3 bg-green-500 text-white rounded-xl font-bold hover:bg-green-400 transition flex items-center gap-2">
-                                <FaCheck /> Reveal Answer
+                                <FaCheckIcon /> Reveal Answer
                             </button>
                         ) : (
                             <button onClick={nextQuizQuestion} className="px-6 py-3 bg-blue-500 text-white rounded-xl font-bold hover:bg-blue-400 transition flex items-center gap-2">
@@ -857,6 +919,7 @@ export default function RoomMessages({ room, onBack }) {
 
       {(showChat || showFiles || showTasks) && (
         <div className="w-96 bg-white flex flex-col shadow-2xl border-l border-gray-100 relative z-20">
+            
             {showChat && (
             <>
                 <div className="p-5 border-b border-gray-100 bg-white flex justify-between items-center">
@@ -864,11 +927,46 @@ export default function RoomMessages({ room, onBack }) {
                     <button onClick={() => setShowChat(false)} className="text-gray-400 hover:text-gray-600"><FaTimes /></button>
                 </div>
                 <div className="flex-1 p-5 overflow-y-auto space-y-4 bg-gray-50/50">
-                {messages.map(m => (
-                    <div key={m.id} className={`flex flex-col ${m.sender === user.email ? "items-end" : "items-start"}`}>
-                    <div className={`px-4 py-2 rounded-2xl max-w-[85%] shadow-sm ${m.sender === user.email ? "bg-blue-600 text-white rounded-tr-none" : "bg-white border text-gray-700 rounded-tl-none"}`}><div className="text-sm">{m.text}</div></div>
+                {messages.map(m => {
+                    // Safe logic to determine if the message belongs to the current user
+                    const safeUserEmail = user?.email || "hidden-email@student.com";
+                    const isMyMessage = m.sender === safeUserEmail;
+
+                    return (
+                    /* --- MODIFIED: CHAT RENDERING WITH BADGES --- */
+                    <div key={m.id} className={`flex flex-col mb-3 ${isMyMessage ? "items-end" : "items-start"}`}>
+                        
+                        {/* Name and Badges Header */}
+                        <div className={`flex items-center gap-1.5 mb-1 text-[10px] font-bold ${isMyMessage ? "flex-row-reverse" : "flex-row"}`}>
+                            <span className="text-gray-500">{m.senderName || "Student"}</span>
+                            
+                            {/* Stacking Badges: Show Admin if Admin, Show Host if Host */}
+                            {m.senderRole === "admin" && (
+                                <span className="bg-yellow-100 text-yellow-700 px-1.5 py-0.5 rounded uppercase tracking-wider flex items-center gap-1 shadow-sm border border-yellow-200">
+                                    <FaCrown size={8}/> Admin
+                                </span>
+                            )}
+                            {m.isHost && (
+                                <span className="bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase tracking-wider flex items-center gap-1 shadow-sm border border-blue-200">
+                                    <FaMicrophone size={8}/> Host
+                                </span>
+                            )}
+                        </div>
+
+                        {/* Message Bubble & Report Flag */}
+                        <div className={`flex items-center gap-2 ${isMyMessage ? "flex-row-reverse" : "flex-row"}`}>
+                            {/* Only show flag if sender is NOT the current user AND sender is NOT an Admin */}
+                            {!isMyMessage && m.senderRole !== "admin" && (
+                                 <button onClick={() => handleReportUser(m.sender)} className="text-gray-300 hover:text-red-500 transition" title="Report User for Spam/Harassment">
+                                     <FaFlag size={10} />
+                                 </button>
+                            )}
+                            <div className={`px-4 py-2 rounded-2xl max-w-[85%] shadow-sm ${isMyMessage ? "bg-blue-600 text-white rounded-tr-none" : "bg-white border text-gray-700 rounded-tl-none"}`}>
+                                <div className="text-sm">{m.text}</div>
+                            </div>
+                        </div>
                     </div>
-                ))}
+                )})}
                 <div ref={chatEndRef} />
                 </div>
                 <form onSubmit={handleSend} className="p-4 border-t border-gray-100 bg-white flex gap-2">
