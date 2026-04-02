@@ -224,6 +224,36 @@ export default function App() {
     setSelectedRoom(null);
   };
 
+  // Guest user profile with limited access
+  const guestProfile = {
+    uid: 'guest-user',
+    username: 'Guest User',
+    fullName: 'Guest User',
+    email: 'guest@focushub.local',
+    photoBase64: null,
+    isGuest: true,
+    totalScore: 0,
+    totalFocusTime: 0,
+    badges: [],
+    // Guest limitations
+    limitations: {
+      canCreateRooms: false,
+      canEditProfile: false,
+      canViewStats: false,
+      canAccessFlashcards: true,
+      canJoinRooms: true,
+      canViewRooms: true,
+      maxStudyTime: 30, // 30 minutes max per session
+      roomFeatures: {
+        canChat: false,
+        canShareFiles: false,
+        canUseTimer: true,
+        canUseBreaks: true,
+        canViewParticipants: true
+      }
+    }
+  };
+
   if (user === undefined)
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-50 to-blue-50">
@@ -239,6 +269,20 @@ export default function App() {
   if (showJoinLoginModal && pendingRoomId) {
     return <Login onLogin={() => setShowJoinLoginModal(false)} onBack={() => setShowJoinLoginModal(false)} />;
   }
+
+  // Handle guest mode - show StudyRoomList with guest profile
+  if (!user && isGuest)
+    return <StudyRoomList
+      user={guestProfile}
+      onSelectRoom={handleSelectRoom}
+      onLogout={() => setIsGuest(false)}
+      onEditProfile={() => {}} // Disabled for guests
+      onCreateRoom={() => {}} // Disabled for guests
+      onOpenStudyBuddyRoom={() => {}} // Disabled for guests
+      onShowStats={() => {}} // Disabled for guests
+      onShowFlashcards={() => setViewingFlashcards(true)} // Enabled for guests
+      onShowAdmin={() => {}} // Disabled for guests
+    />;
 
   if (!user && !isGuest)
     return <Home onGuest={() => setIsGuest(true)} onLoginClick={() => setShowLogin(true)} />;

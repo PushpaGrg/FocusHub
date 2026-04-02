@@ -1,10 +1,11 @@
 // src/pages/RoomMessages.jsx
 import { useState, useEffect, useRef } from "react";
-import { db, auth } from "../firebase";
-import {
+import { db, auth, storage } from "../firebase";
+import { 
   collection, doc, deleteDoc, getDocs, addDoc, query, orderBy, onSnapshot,
   serverTimestamp, setDoc, where, updateDoc, increment, arrayUnion, getDoc
 } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { containsSpam } from "../utils/spamDetection";
 import { 
   FaArrowLeft, FaEye, FaVideo, FaVideoSlash, FaMicrophone, FaMicrophoneSlash,
@@ -13,7 +14,7 @@ import {
   FaExclamationTriangle, FaPaperclip, FaLink, FaExternalLinkAlt, 
   FaTimes, FaPlus, FaCloudUploadAlt, FaFilePdf, FaImage, FaDownload, 
   FaDesktop, FaTrash, FaCheckCircle, FaClock, FaInfoCircle, FaMedal, FaStar,
-  FaTasks, FaBrain, FaPlay, FaCheckCircle as FaCheckIcon, FaTimesCircle, FaFlag, FaCrown
+  FaTasks, FaBrain, FaPlay, FaCheckCircle as FaCheckIcon, FaTimesCircle, FaFlag, FaCrown, FaCircle
 } from "react-icons/fa";
 const Peer = window.SimplePeer;
 import { useAuthState } from "react-firebase-hooks/auth";
@@ -75,7 +76,7 @@ const SessionReportModal = ({ stats, onClose }) => {
         </div>
         <div className="bg-blue-50/50 p-3 rounded-xl border border-blue-100 text-[10px] text-gray-500 mb-6 text-left space-y-1">
             <p className="font-bold text-blue-800 mb-1">Scoring Breakdown:</p>
-            <p className="flex justify-between"><span>• Time Focused (+10/min):</span> <span>+{stats.minutes * 10}</span></p>
+            <p className="flex justify-between"><span>• Time Focused:</span> <span>+{stats.minutes >= 0.5 ? Math.floor(stats.minutes * 10) : 0}</span></p>
             <p className="flex justify-between"><span>• Uploads (+50/ea):</span> <span>+{stats.uploads * 50}</span></p>
             <p className="flex justify-between text-green-600 font-bold"><span>• Quiz Points:</span> <span>+{stats.quizPoints}</span></p>
             <p className="flex justify-between text-red-500"><span>• Distractions (-20/ea):</span> <span>-{stats.distractions * 20}</span></p>
@@ -150,7 +151,7 @@ export default function RoomMessages({ room, onBack }) {
 
   const [messages, setMessages] = useState([]);
   const [newMsg, setNewMsg] = useState("");
-  const [viewers, setViewers] = useState(room?.viewers || Math.floor(Math.random() * 150 + 30));
+  const [viewers, setViewers] = useState(0);
   const [reactions, setReactions] = useState([]);
   
   const [streamLive, setStreamLive] = useState(isDummy ? true : false);
@@ -203,6 +204,14 @@ export default function RoomMessages({ room, onBack }) {
   const sessionStartTime = useRef(Date.now()); 
   const uploadsCount = useRef(0); 
   
+  // Video recording states
+  const mediaRecorderRef = useRef(null);
+  const recordedChunksRef = useRef([]);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const recordingStartTimeRef = useRef(null);
+  const recordingIntervalRef = useRef(null); 
+  
   const viewerIdRef = useRef(user ? `${user.uid}_${Date.now()}` : null);
   const roomRef = doc(db, "studyRooms", room.id);
 
@@ -222,8 +231,10 @@ export default function RoomMessages({ room, onBack }) {
 
   const generateSessionReport = async () => {
     const endTime = Date.now();
-    const durationMinutes = Math.max(1, Math.floor((endTime - sessionStartTime.current) / 1000 / 60));
-    let score = (durationMinutes * 10) + (uploadsCount.current * 50) + earnedQuizPoints.current - (distractionCount * 20);
+    const durationMinutes = Math.floor((endTime - sessionStartTime.current) / 1000 / 60);
+    // Only award time-based points if user stayed at least 30 seconds (0.5 minutes)
+    const timePoints = durationMinutes >= 0.5 ? Math.floor(durationMinutes * 10) : 0;
+    let score = timePoints + (uploadsCount.current * 50) + earnedQuizPoints.current - (distractionCount * 20);
     if (score < 0) score = 0;
 
     const badges = [];
@@ -595,6 +606,10 @@ export default function RoomMessages({ room, onBack }) {
       if (localVideoRef.current) localVideoRef.current.srcObject = stream;
       setStreamLive(true); setCamOn(true); setMicOn(true);
       sessionStartTime.current = Date.now(); 
+      
+      // AUTOMATIC RECORDING: Start recording immediately when stream goes live
+      await startAutomaticRecording();
+      
       await updateDoc(roomRef, { isLive: true });
       if (timerData.autoStart) { await updateDoc(roomRef, { "timer.isRunning": true, "timer.isConfigured": true, "timer.autoStart": false }); } 
       else if (!timerData.isConfigured) { await updateDoc(roomRef, { "timer.isConfigured": false }); }
@@ -609,18 +624,48 @@ export default function RoomMessages({ room, onBack }) {
             try {
                 const peer = new Peer({ initiator: true, trickle: false });
                 if (localStreamRef.current) peer.addStream(localStreamRef.current);
-                peer.on("signal", async signal => { await setDoc(doc(db, "studyRooms", room.id, "signals", data.viewerId), { hostSignal: signal }, { merge: true }); });
-                peer.on("close", () => delete peersRef.current[data.viewerId]);
+                peer.on("signal", async signal => { 
+                    try {
+                        await setDoc(doc(db, "studyRooms", room.id, "signals", data.viewerId), { hostSignal: signal }, { merge: true }); 
+                    } catch (err) {
+                        console.error("Error sending host signal:", err);
+                    }
+                });
+                peer.on("close", () => {
+                    delete peersRef.current[data.viewerId];
+                    console.log("Peer closed for viewer:", data.viewerId);
+                });
+                peer.on("error", (err) => {
+                    console.error("Peer error:", err);
+                    delete peersRef.current[data.viewerId];
+                });
                 peersRef.current[data.viewerId] = peer;
                 const viewerDocRef = doc(db, "studyRooms", room.id, "signals", data.viewerId);
                 const viewerUnsub = onSnapshot(viewerDocRef, docSnap => {
                     const viewerData = docSnap.data();
-                    if (viewerData?.viewerSignal && peer && !peer.destroyed) { peer.signal(viewerData.viewerSignal); viewerUnsub(); }
+                    if (viewerData?.viewerSignal && peer && !peer.destroyed && peer.signalingState !== 'closed') { 
+                        try {
+                            peer.signal(viewerData.viewerSignal); 
+                            viewerUnsub(); 
+                            console.log("Viewer signal received and sent to peer");
+                        } catch (err) {
+                            console.error("Error signaling peer:", err);
+                            // Clean up destroyed peer on error
+                            if (peer.destroyed || peer.signalingState === 'closed') {
+                                delete peersRef.current[data.viewerId];
+                                viewerUnsub();
+                            }
+                        }
+                    }
                 });
-            } catch (err) {}
+            } catch (err) {
+                console.error("Error handling viewer signal:", err);
+            }
         }
       });
-    } catch (err) { triggerToast(`Camera Error: ${err.message}`, "error"); }
+    } catch (err) {
+        console.error("Error starting stream:", err);
+    }
   };
 
   const handleStopStream = async (showReport = true) => {
@@ -629,6 +674,10 @@ export default function RoomMessages({ room, onBack }) {
      peersRef.current = {};
      if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(t => t.stop()); localStreamRef.current = null; }
      if (signalingUnsubscribeRef.current) signalingUnsubscribeRef.current();
+     
+     // AUTOMATIC SAVING: Save recording when stream ends
+     await stopAutomaticRecording();
+     
      await updateDoc(roomRef, { isLive: false, liveThumbnail: null, activeResource: null, "activeQuiz": null, "timer.isRunning": false, "timer.isConfigured": false, "timer.timeLeft": 1500, "timer.mode": 'work' });
      
      if (showReport) { await generateSessionReport(); }
@@ -644,37 +693,234 @@ export default function RoomMessages({ room, onBack }) {
         const unsubscribe = onSnapshot(signalDocRef, docSnap => {
           const data = docSnap.data();
           if (!data?.hostSignal || peersRef.current[viewerId]) return;
-          const peer = new Peer({ initiator: false, trickle: false });
-          peer.on("signal", async signal => { await setDoc(signalDocRef, { viewerSignal: signal }, { merge: true }); });
-          peer.on("stream", remoteStream => { setRemoteStreams(prev => ({ ...prev, [viewerId]: remoteStream })); });
-          peer.signal(data.hostSignal);
-          peersRef.current[viewerId] = peer;
+          
+          // Only create new peer if one doesn't exist
+          if (!peersRef.current[viewerId]) {
+              const peer = new Peer({ initiator: false, trickle: false });
+              peer.on("signal", async signal => { 
+                  try {
+                      await setDoc(signalDocRef, { viewerSignal: signal }, { merge: true }); 
+                  } catch (err) {
+                      console.error("Error sending viewer signal:", err);
+                  }
+              });
+              peer.on("stream", remoteStream => { 
+                  setRemoteStreams(prev => ({ ...prev, [viewerId]: remoteStream })); 
+              });
+              peer.on("close", () => {
+                  delete peersRef.current[viewerId];
+                  console.log("Viewer peer closed:", viewerId);
+              });
+              peer.on("error", (err) => {
+                  console.error("Viewer peer error:", err);
+                  delete peersRef.current[viewerId];
+              });
+              
+              // Only signal if peer is in valid state
+              if (peer && !peer.destroyed && peer.signalingState !== 'closed') {
+                  try {
+                      peer.signal(data.hostSignal);
+                  } catch (err) {
+                      console.error("Error setting host signal:", err);
+                  }
+              }
+              
+              peersRef.current[viewerId] = peer;
+          } else {
+              // Use existing peer but validate state
+              const existingPeer = peersRef.current[viewerId];
+              if (existingPeer && !existingPeer.destroyed && existingPeer.signalingState !== 'closed') {
+                  try {
+                      existingPeer.signal(data.hostSignal);
+                  } catch (err) {
+                      console.error("Error signaling existing peer:", err);
+                      // Clean up problematic peer
+                      delete peersRef.current[viewerId];
+                  }
+              }
+          }
         });
       } catch (err) {}
     };
     joinRoom();
   }, [isHost, isDummy, room?.id, room?.createdBy, user?.uid]);
 
+  // Real-time viewer count tracking
+  useEffect(() => {
+    if (!room?.id) return;
+    
+    const viewersQuery = query(collection(db, "studyRooms", room.id, "signals"));
+    const unsubscribe = onSnapshot(viewersQuery, (snapshot) => {
+      const viewerCount = snapshot.docs.filter(doc => {
+        const data = doc.data();
+        return data.type === "viewer" && !data.viewerSignal;
+      }).length;
+      
+      setViewers(viewerCount);
+    });
+    
+    return () => unsubscribe();
+  }, [room?.id]);
+
   const toggleCamera = () => { if (!localStreamRef.current) return; const track = localStreamRef.current.getVideoTracks()[0]; if (track) { track.enabled = !track.enabled; setCamOn(track.enabled); } };
   const toggleMicrophone = () => { if (!localStreamRef.current) return; const track = localStreamRef.current.getAudioTracks()[0]; if (track) { track.enabled = !track.enabled; setMicOn(track.enabled); } };
 
-  useEffect(() => {
-    let interval = null;
-    if (isHost && streamLive && localVideoRef.current && timerData.mode === 'work') {
-      interval = setInterval(async () => {
-        try {
-          const video = localVideoRef.current;
-          const canvas = document.createElement("canvas");
-          canvas.width = 640; canvas.height = 360;
-          const ctx = canvas.getContext("2d");
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-          const thumbnailData = canvas.toDataURL("image/jpeg", 0.8);
-          await updateDoc(roomRef, { liveThumbnail: thumbnailData, isLive: true });
-        } catch (err) {}
-      }, 1500);
-    } else if (isHost && !streamLive) { updateDoc(roomRef, { liveThumbnail: null, isLive: false }).catch(()=>{}); }
-    return () => clearInterval(interval);
-  }, [isHost, streamLive, timerData.mode]);
+  // 🎥 AUTOMATIC RECORDING: Starts when stream goes live
+  const startAutomaticRecording = () => {
+    if (!localStreamRef.current || mediaRecorderRef.current) return;
+    
+    try {
+      const mediaRecorder = new MediaRecorder(localStreamRef.current, {
+        mimeType: 'video/webm;codecs=vp8,opus'
+      });
+      
+      recordedChunksRef.current = [];
+      
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          recordedChunksRef.current.push(event.data);
+        }
+      };
+      
+      mediaRecorderRef.current = mediaRecorder;
+      mediaRecorder.start(1000); // Collect data every 1 second
+      
+      recordingStartTimeRef.current = Date.now();
+      setIsRecording(true);
+      
+      // Update recording duration every second
+      recordingIntervalRef.current = setInterval(() => {
+        setRecordingDuration(Math.floor((Date.now() - recordingStartTimeRef.current) / 1000));
+      }, 1000);
+      
+      console.log("🎥 Automatic recording started");
+    } catch (error) {
+      console.error("Error starting automatic recording:", error);
+    }
+  };
+
+  // 🎥 AUTOMATIC SAVING: Saves when stream ends
+  const stopAutomaticRecording = async () => {
+    if (!mediaRecorderRef.current) return;
+    
+    mediaRecorderRef.current.stop();
+    mediaRecorderRef.current = null;
+    setIsRecording(false);
+    
+    // Save the recorded video automatically
+    await saveRecordedVideo();
+
+    // Add a 2-second delay before clearing the recording interval
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    if (recordingIntervalRef.current) {
+      clearInterval(recordingIntervalRef.current);
+      recordingIntervalRef.current = null;
+    }
+    
+    setRecordingDuration(0);
+    console.log(" Automatic recording stopped and saved");
+};
+
+const saveRecordedVideo = async () => {
+    if (recordedChunksRef.current.length === 0) return;
+    
+    try {
+        // Create blob from recorded chunks
+        const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+        
+        // Generate unique filename
+        const timestamp = Date.now();
+        const fileName = `room_${room.id}_${user.uid}_${timestamp}.webm`;
+        
+        // Save to Cloudinary
+        const videoURL = await saveToCloudinary(blob, fileName);
+        const storageType = videoURL ? 'cloudinary' : 'local';
+        
+        // Save metadata to Firestore
+        const videoDoc = {
+            roomId: room.id,
+            userId: user.uid,
+            userName: user?.displayName || user?.email?.split('@')[0] || 'Anonymous',
+            fileName: fileName,
+            videoURL: videoURL,
+            duration: recordingDuration,
+            timestamp: serverTimestamp(),
+            size: blob.size,
+            type: 'webm',
+            storageType: storageType
+        };
+        
+        const videoRef = await addDoc(collection(db, "room_videos"), videoDoc);
+        
+        // Update room with latest video reference
+        await updateDoc(roomRef, {
+            latestVideo: {
+                id: videoRef.id,
+                duration: recordingDuration,
+                timestamp: serverTimestamp(),
+                userName: videoDoc.userName,
+                fileName: fileName,
+                videoURL: videoURL,
+                storageType: storageType
+            }
+        });
+        
+        recordedChunksRef.current = [];
+        
+    } catch (error) {
+        console.error("Error saving video:", error);
+    }
+};
+
+// Save to Cloudinary (25GB bandwidth)
+const saveToCloudinary = async (blob, fileName) => {
+    try {
+        const cloudName = 'dp4ounwlg';
+        const uploadPreset = 'livestreams';
+        
+        const formData = new FormData();
+        formData.append('file', blob);
+        formData.append('upload_preset', uploadPreset);
+        formData.append('resource_type', 'video');
+        
+        const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/video/upload`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (response.ok) {
+            const result = await response.json();
+            return result.secure_url;
+        } else {
+            throw new Error('Cloudinary upload failed');
+        }
+    } catch (error) {
+      console.error('Cloudinary storage error:', error);
+      return null;
+    }
+  };
+
+  const blobToBase64 = (blob) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
+
+  // Auto-download to user's computer
+  const saveToComputer = (blob, fileName) => {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
 
   useEffect(() => {
     if (!room?.id) return;
@@ -902,6 +1148,7 @@ export default function RoomMessages({ room, onBack }) {
                 <div className="w-px bg-white/20 mx-1"></div>
                 <ControlButton onClick={toggleCamera} disabled={!streamLive || timerData.mode === 'break'} icon={camOn ? <FaVideo /> : <FaVideoSlash />} label={camOn ? "Cam Off" : "Cam On"} variant={camOn ? "default" : "danger"} />
                 <ControlButton onClick={toggleMicrophone} disabled={!streamLive || timerData.mode === 'break'} icon={micOn ? <FaMicrophone /> : <FaMicrophoneSlash />} label={micOn ? "Mute" : "Unmute"} variant={micOn ? "default" : "danger"} />
+                
                 {!streamLive ? (
                   <ControlButton onClick={handleStartStream} disabled={timerData.mode === 'break'} icon={<FaBroadcastTower />} label="Go Live" variant="success" />
                 ) : (

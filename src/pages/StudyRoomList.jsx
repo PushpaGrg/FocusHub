@@ -147,6 +147,8 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
   const [showMyRooms, setShowMyRooms] = useState(false);
   const [showCreateRoom, setShowCreateRoom] = useState(false);
   const [cooldowns, setCooldowns] = useState({});
+  const [showAuthDialog, setShowAuthDialog] = useState(false);
+  const [authAction, setAuthAction] = useState('');
   
   // Search and Filter states
   const [searchQuery, setSearchQuery] = useState("");
@@ -154,6 +156,26 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
 
   const auth = getAuth();
   const firebaseUser = auth.currentUser;
+
+  // Guest mode detection
+  const isGuestMode = user?.isGuest || false;
+
+  // Handle restricted actions for guest users
+  const handleRestrictedAction = (action) => {
+    if (isGuestMode) {
+      setAuthAction(action);
+      setShowAuthDialog(true);
+      return true; // Indicates action was blocked
+    }
+    return false; // Action can proceed
+  };
+
+  // Redirect to login/signup
+  const handleAuthRedirect = () => {
+    // This will trigger the parent to show login
+    onLogout(); // This will exit guest mode and show login
+    setShowAuthDialog(false);
+  };
 
   // Fetch real rooms from Firebase
   useEffect(() => {
@@ -225,20 +247,32 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
           <div className="flex items-center gap-3">
             {allRooms.length > 0 && (
               <NavIconButton 
-                onClick={onOpenStudyBuddyRoom} 
+                onClick={() => {
+                  if (!handleRestrictedAction('Study Buddy')) {
+                    onOpenStudyBuddyRoom();
+                  }
+                }} 
                 icon={<FaVideo />} 
                 label="Study Buddy" 
               />
             )}
 
             <NavIconButton 
-              onClick={onShowFlashcards} 
+              onClick={() => {
+                if (!handleRestrictedAction('Flashcards')) {
+                  onShowFlashcards();
+                }
+              }} 
               icon={<FaBookOpen />} 
               label="Flashcards" 
             />
 
             <NavIconButton 
-              onClick={() => setShowCreateRoom(true)} 
+              onClick={() => {
+                if (!handleRestrictedAction('Create Room')) {
+                  setShowCreateRoom(true);
+                }
+              }} 
               icon={<FaPlus />} 
               label="Create Room" 
             />
@@ -271,14 +305,24 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                   </div>
                   
                   <button
-                    onClick={() => { onShowStats(); setIsDropdownOpen(false); }}
+                    onClick={() => {
+                      if (!handleRestrictedAction('My Statistics')) {
+                        onShowStats(); 
+                        setIsDropdownOpen(false);
+                      }
+                    }}
                     className="flex items-center gap-3 w-full text-left px-5 py-3 hover:bg-gray-50 text-gray-600 hover:text-blue-600 transition text-sm font-medium"
                   >
                     <FaChartBar className="text-lg" /> My Statistics
                   </button>
 
                   <button
-                    onClick={() => { onEditProfile(); setIsDropdownOpen(false); }}
+                    onClick={() => {
+                      if (!handleRestrictedAction('Edit Profile')) {
+                        onEditProfile(); 
+                        setIsDropdownOpen(false);
+                      }
+                    }}
                     className="flex items-center gap-3 w-full text-left px-5 py-3 hover:bg-gray-50 text-gray-600 hover:text-blue-600 transition text-sm font-medium"
                   >
                     <FaUser className="text-lg" /> Edit Profile
@@ -287,7 +331,12 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                   {/* ---> FIX 2: Admin button properly separated from Logout button <--- */}
                   {true && (
                     <button
-                      onClick={() => { onShowAdmin(); setIsDropdownOpen(false); }}
+                      onClick={() => {
+                        if (!handleRestrictedAction('Admin Panel')) {
+                          onShowAdmin(); 
+                          setIsDropdownOpen(false);
+                        }
+                      }}
                       className="flex items-center gap-3 w-full text-left px-5 py-3 hover:bg-purple-50 text-purple-600 transition text-sm font-bold border-t border-gray-100"
                     >
                       <FaCrown className="text-lg" /> Admin Panel
@@ -374,7 +423,11 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                 {searchQuery ? "Try adjusting your search or category." : "Be the first to open a room!"}
               </p>
               <button
-                onClick={() => setShowCreateRoom(true)}
+                onClick={() => {
+                  if (!handleRestrictedAction('Create Room')) {
+                    setShowCreateRoom(true);
+                  }
+                }}
                 className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-8 py-3.5 rounded-2xl hover:shadow-lg hover:shadow-blue-500/30 transition transform hover:scale-105 font-bold flex items-center gap-2 mx-auto"
               >
                 <FaPlus /> Create Room
@@ -470,7 +523,9 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                       disabled={!!cooldowns[room.id]}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onSelectRoom(room);
+                        if (!handleRestrictedAction('Join Room')) {
+                          onSelectRoom(room);
+                        }
                       }}
                       className={`w-full py-3.5 rounded-xl font-bold text-sm transition-all shadow-lg flex items-center justify-center gap-2 group-hover:translate-y-0 ${
                         cooldowns[room.id] 
@@ -524,6 +579,47 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                 onSelectRoom({ id: docRef.id, ...newRoom });
               }}
             />
+          </div>
+        </div>
+      )}
+
+      {/* Authentication Required Dialog */}
+      {showAuthDialog && (
+        <div className="fixed inset-0 flex items-center justify-center z-50 bg-black/40 backdrop-blur-sm p-4 animate-fadeIn">
+          <div className="bg-white p-8 rounded-[2rem] shadow-2xl w-full max-w-md relative animate-slideUp border border-white/50">
+            <button
+              className="absolute top-5 right-5 text-gray-400 hover:text-gray-800 transition p-2 hover:bg-gray-100 rounded-full"
+              onClick={() => setShowAuthDialog(false)}
+            >
+              <FaTimes size={20} />
+            </button>
+            
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-gradient-to-r from-blue-600 to-purple-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                <FaUser className="text-white text-2xl" />
+              </div>
+              <h3 className="text-2xl font-bold text-gray-800 mb-2">
+                Authentication Required
+              </h3>
+              <p className="text-gray-600 mb-6">
+                Please sign up or login to {authAction.toLowerCase()}. This feature is only available to registered users.
+              </p>
+            </div>
+            
+            <div className="flex flex-col gap-3">
+              <button
+                onClick={handleAuthRedirect}
+                className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-3.5 rounded-xl font-bold hover:shadow-lg hover:shadow-blue-500/30 transition transform hover:scale-105 flex items-center justify-center gap-2"
+              >
+                Sign Up / Login
+              </button>
+              <button
+                onClick={() => setShowAuthDialog(false)}
+                className="w-full bg-gray-100 text-gray-700 py-3.5 rounded-xl font-bold hover:bg-gray-200 transition"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
