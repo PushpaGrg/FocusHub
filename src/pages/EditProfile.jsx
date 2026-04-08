@@ -144,29 +144,60 @@ export default function EditProfile({ user, onSave, onCancel }) {
       return;
     }
 
-    // Validate file size (before compression)
+    // Check if file needs compression (> 750KB)
+    // Silently compress without showing error dialog
     if (file.size > MAX_FILE_SIZE) {
-      setErrorDialog(`File size must be less than 750KB (current: ${(file.size / 1024).toFixed(2)}KB). Your image will be compressed automatically.`);
-      
-      // Try to compress the image
       try {
         setIsUploading(true);
-        setUploadProgress(0);
+        setUploadProgress(10);
         
-        const compressedFile = await compressImage(file, 0.6, 600, 600);
+        // Determine compression level based on file size
+        let quality = 0.7;
+        let maxDim = 800;
         
-        if (compressedFile.size > MAX_FILE_SIZE) {
-          setErrorDialog(`Even after compression, the file is too large (${(compressedFile.size / 1024).toFixed(2)}KB). Please choose a smaller image.`);
-          setIsUploading(false);
-          return;
+        if (file.size > 5 * 1024 * 1024) {
+          // File > 5MB - aggressive compression
+          quality = 0.5;
+          maxDim = 600;
+        } else if (file.size > 2 * 1024 * 1024) {
+          // File > 2MB - medium compression
+          quality = 0.6;
+          maxDim = 700;
         }
         
-        // Continue with compressed file
-        await processFileUpload(compressedFile);
+        setUploadProgress(30);
+        const compressedFile = await compressImage(file, quality, maxDim, maxDim);
+        setUploadProgress(60);
+        
+        // If still too large, try more aggressive compression
+        if (compressedFile.size > MAX_FILE_SIZE) {
+          const moreCompressed = await compressImage(file, 0.4, 500, 500);
+          setUploadProgress(80);
+          
+          if (moreCompressed.size > MAX_FILE_SIZE) {
+            // One more attempt with very aggressive compression
+            const finalCompressed = await compressImage(file, 0.3, 400, 400);
+            setUploadProgress(90);
+            
+            if (finalCompressed.size > MAX_FILE_SIZE) {
+              setErrorDialog(`Could not compress image enough. Please choose a smaller image (target: < 750KB).`);
+              setIsUploading(false);
+              setUploadProgress(0);
+              return;
+            }
+            await processFileUpload(finalCompressed);
+          } else {
+            await processFileUpload(moreCompressed);
+          }
+        } else {
+          await processFileUpload(compressedFile);
+        }
         
       } catch (error) {
+        console.error("Compression error:", error);
         setErrorDialog("Failed to compress image. Please try a different image.");
         setIsUploading(false);
+        setUploadProgress(0);
       }
       return;
     }

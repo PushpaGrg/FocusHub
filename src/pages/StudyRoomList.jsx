@@ -133,11 +133,24 @@ const NavIconButton = ({ onClick, icon, label, active = false }) => {
 // Animated equalizer component for "Live" indicator
 const LiveEqualizer = () => (
   <div className="flex items-center gap-[2px] h-3">
-    <div className="w-[3px] bg-red-500 rounded-full animate-eq-1"></div>
-    <div className="w-[3px] bg-red-500 rounded-full animate-eq-2"></div>
-    <div className="w-[3px] bg-red-500 rounded-full animate-eq-3"></div>
+    <div className="w-[3px] bg-gradient-to-t from-red-500 to-red-400 rounded-full animate-eq-1"></div>
+    <div className="w-[3px] bg-gradient-to-t from-red-500 to-red-400 rounded-full animate-eq-2"></div>
+    <div className="w-[3px] bg-gradient-to-t from-red-500 to-red-400 rounded-full animate-eq-3"></div>
   </div>
 );
+
+// Category icon mapping for room cards
+const getCategoryIcon = (category) => {
+  const icons = {
+    Tech: <FaLaptopCode />,
+    Medical: <FaStethoscope />,
+    Reading: <FaBook />,
+    Music: <FaHeadphones />,
+    Quiet: <FaCoffee />,
+    default: <FaBookOpen />
+  };
+  return icons[category] || icons.default;
+};
 
 // ---> FIX 1: Added onShowAdmin to the props list here! <---
 export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProfile, onCreateRoom, onOpenStudyBuddyRoom, onShowStats, onShowFlashcards, onShowAdmin }) {
@@ -207,9 +220,9 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
   const username = user?.username || user?.email?.split("@")[0];
   const currentUserId = firebaseUser?.uid || user?.uid;
   
-  // Combine real rooms with dummy rooms
-  const allRooms = showMyRooms 
-    ? rooms.filter(room => room.createdBy === currentUserId)
+  // Combine real rooms with dummy rooms (Study Buddy rooms stay visible on the grid; join is blocked in App unless owner or invite link)
+  const allRooms = showMyRooms
+    ? rooms.filter((room) => room.createdBy === currentUserId)
     : [...rooms, ...DUMMY_ROOMS];
 
   // Filter by search and category
@@ -439,7 +452,10 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                 <div
                   key={room.id}
                   className="bg-white rounded-[2rem] shadow-lg shadow-gray-200/50 hover:shadow-2xl hover:shadow-blue-500/10 transition-all duration-300 group cursor-pointer border border-gray-100 overflow-hidden flex flex-col hover:-translate-y-2"
-                  onClick={() => !cooldowns[room.id] && onSelectRoom(room)}
+                  onClick={() =>
+                    !cooldowns[room.id] &&
+                    onSelectRoom(room, { source: showMyRooms ? "myRooms" : "browse" })
+                  }
                 >
                   {/* Thumbnail/Video Area */}
                   <div className="relative h-56 bg-gray-900 overflow-hidden">
@@ -481,7 +497,7 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
 
                       <div className="flex items-center gap-1.5 text-gray-600">
                         <FaEye className="text-blue-500" /> 
-                        {room.isDummy ? room.viewers : (room.participants?.length || 0)}
+                        {room.isDummy ? room.viewers : (room.viewerCount || 0)}
                       </div>
                     </div>
                     
@@ -524,7 +540,7 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                       onClick={(e) => {
                         e.stopPropagation();
                         if (!handleRestrictedAction('Join Room')) {
-                          onSelectRoom(room);
+                          onSelectRoom(room, { source: showMyRooms ? "myRooms" : "browse" });
                         }
                       }}
                       className={`w-full py-3.5 rounded-xl font-bold text-sm transition-all shadow-lg flex items-center justify-center gap-2 group-hover:translate-y-0 ${
@@ -566,7 +582,6 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
                 
                 const newRoom = {
                   ...roomData,
-                  category: "Quiet", // Default category for user created rooms
                   createdBy: firebaseUser.uid,
                   createdAt: serverTimestamp(),
                   participants: [],
@@ -576,7 +591,7 @@ export default function StudyRoomList({ user, onSelectRoom, onLogout, onEditProf
 
                 const docRef = await addDoc(collection(db, "studyRooms"), newRoom);
                 setShowCreateRoom(false);
-                onSelectRoom({ id: docRef.id, ...newRoom });
+                onSelectRoom({ id: docRef.id, ...newRoom }, { source: "internal" });
               }}
             />
           </div>

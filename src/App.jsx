@@ -1,5 +1,5 @@
 // src/App.jsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useLayoutEffect } from "react";
 import { auth, db } from "./firebase";
 import { signOut, updateEmail } from "firebase/auth";
 import { doc, getDoc, setDoc, collection, addDoc, onSnapshot } from "firebase/firestore";
@@ -16,6 +16,13 @@ import CreateRoom from "./pages/CreateRoom";
 import UserStatistics from "./pages/UserStatistics";
 import FlashcardHub from "./pages/FlashcardHub"; 
 import AdminDashboard from "./pages/AdminDashboard";
+import { FaTimes, FaLock } from "react-icons/fa";
+
+/** Study Buddy / invite-only rooms: main grid never opens these — only invite URL, post-create, or “My Rooms” (host). */
+function isInviteOnlyStudyBuddyRoom(room) {
+  if (!room) return false;
+  return room.type === "studyBuddy" || room.inviteOnly === true;
+}
 
 export default function App() {
   const [user, setUser] = useState(undefined);
@@ -33,6 +40,7 @@ export default function App() {
   const [showJoinLoginModal, setShowJoinLoginModal] = useState(false);
   const location = useLocation();
   const [viewingAdmin, setViewingAdmin] = useState(false);
+  const [studyBuddyAccessDenied, setStudyBuddyAccessDenied] = useState(false);
 
   // --- REAL-TIME PROFILE SYNC ---
   useEffect(() => {
@@ -93,6 +101,16 @@ export default function App() {
     }
   }, [user, pendingRoomId, showJoinLoginModal]);
 
+  useLayoutEffect(() => {
+    if (!selectedRoom) return;
+    if (!isInviteOnlyStudyBuddyRoom(selectedRoom)) return;
+    const allowed = showStudyBuddyRoom === true;
+    if (allowed) return;
+    setSelectedRoom(null);
+    setShowStudyBuddyRoom(false);
+    setStudyBuddyAccessDenied(true);
+  }, [selectedRoom, showStudyBuddyRoom]);
+
   const handleJoinRoom = async (roomId) => {
     try {
       const roomRef = doc(db, "studyRooms", roomId);
@@ -101,7 +119,7 @@ export default function App() {
       if (roomSnap.exists()) {
         const room = { id: roomSnap.id, ...roomSnap.data() };
         setSelectedRoom(room);
-        setShowStudyBuddyRoom(true);
+        setShowStudyBuddyRoom(isInviteOnlyStudyBuddyRoom(room));
       } else {
         alert("Room not found!");
       }
@@ -126,12 +144,39 @@ export default function App() {
     }
   };
 
-  const handleSelectRoom = (room) => {
+  /**
+   * @param {object} room
+   * @param {{ source?: 'browse' | 'myRooms' | 'internal' }} [opts]
+   * - browse: main grid — invite-only Study Buddy is blocked for everyone (use invite link).
+   * - myRooms: host may open their own Study Buddy room without an invite.
+   * - internal: e.g. right after creating a normal room from the modal.
+   */
+  const handleSelectRoom = (room, opts = {}) => {
+    const source = opts.source ?? "browse";
     if (!user && !isGuest) {
       alert("Please login or sign up to enter a study room!");
       return;
     }
+    const uid = auth.currentUser?.uid ?? profile?.uid;
+
+    if (isInviteOnlyStudyBuddyRoom(room)) {
+      if (source === "browse") {
+        setStudyBuddyAccessDenied(true);
+        return;
+      }
+      if (source === "myRooms") {
+        if (room.createdBy !== uid) {
+          setStudyBuddyAccessDenied(true);
+          return;
+        }
+        setSelectedRoom(room);
+        setShowStudyBuddyRoom(true);
+        return;
+      }
+    }
+
     setSelectedRoom(room);
+    setShowStudyBuddyRoom(isInviteOnlyStudyBuddyRoom(room));
   };
 
   const handleLogout = async () => {
@@ -140,6 +185,7 @@ export default function App() {
     setProfile(null);
     setSelectedRoom(null);
     setShowStudyBuddyRoom(false);
+    setStudyBuddyAccessDenied(false);
   };
 
   const handleCreateRoom = () => {
@@ -174,6 +220,7 @@ export default function App() {
       };
 
       setCreatingRoom(false);
+      setShowStudyBuddyRoom(false);
       setSelectedRoom(newRoom);
     } catch (err) {
       alert("Error creating room: " + err.message);
@@ -197,6 +244,7 @@ export default function App() {
         participants: [],
         isPrivate: true,
         type: "studyBuddy",
+        inviteOnly: true,
         timer: initialTimer,
       });
 
@@ -207,6 +255,7 @@ export default function App() {
         participants: [],
         isPrivate: true,
         type: "studyBuddy",
+        inviteOnly: true,
         timer: initialTimer,
       };
       
@@ -302,11 +351,31 @@ export default function App() {
   if (viewingFlashcards)
     return <FlashcardHub user={profile} onBack={() => setViewingFlashcards(false)} />; // <-- THIS HANDLES THE RENDER
 
-  if (showStudyBuddyRoom && selectedRoom)
-    return <StudyBuddyRoom room={selectedRoom} user={profile} onBack={handleExitStudyBuddyRoom} />;
+  if (selectedRoom) {
+    const inviteBuddy = isInviteOnlyStudyBuddyRoom(selectedRoom);
+    const mayUseStudyBuddyUI = inviteBuddy && showStudyBuddyRoom === true;
 
-  if (selectedRoom)
-    return <RoomMessages room={selectedRoom} user={profile} onBack={() => setSelectedRoom(null)} />;
+    if (inviteBuddy) {
+      if (mayUseStudyBuddyUI) {
+        return (
+          <StudyBuddyRoom
+            room={selectedRoom}
+            user={profile}
+            onBack={handleExitStudyBuddyRoom}
+          />
+        );
+      }
+      return null;
+    }
+
+    return (
+      <RoomMessages
+        room={selectedRoom}
+        user={profile}
+        onBack={() => setSelectedRoom(null)}
+      />
+    );
+  }
 
   if (viewingAdmin)
     return <AdminDashboard user={profile} onBack={() => setViewingAdmin(false)} />;
@@ -328,16 +397,74 @@ export default function App() {
   }
 
   return (
-    <StudyRoomList
-      user={profile}
-      onSelectRoom={handleSelectRoom}
-      onLogout={handleLogout}
-      onEditProfile={() => setEditingProfile(true)}
-      onCreateRoom={handleCreateRoom}
-      onOpenStudyBuddyRoom={handleCreateStudyBuddy}
-      onShowStats={() => setViewingStats(true)} 
-      onShowFlashcards={() => setViewingFlashcards(true)} 
-      onShowAdmin={() => setViewingAdmin(true)} // <-- ADD THIS
-    />
+    <>
+      {studyBuddyAccessDenied && (
+        <div
+          className="fixed inset-0 flex items-center justify-center z-[60] bg-black/40 backdrop-blur-sm p-4 animate-fadeIn"
+          role="presentation"
+          onClick={() => setStudyBuddyAccessDenied(false)}
+        >
+          <div
+            className="bg-white p-8 rounded-[2rem] shadow-2xl w-full max-w-md relative border border-white/50 animate-slideUp"
+            role="alertdialog"
+            aria-labelledby="study-buddy-denied-title"
+            aria-describedby="study-buddy-denied-desc"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="absolute top-5 right-5 text-gray-400 hover:text-gray-800 transition p-2 hover:bg-gray-100 rounded-full"
+              onClick={() => setStudyBuddyAccessDenied(false)}
+              aria-label="Close"
+            >
+              <FaTimes size={20} />
+            </button>
+            <div className="text-center mb-6">
+              <div className="w-16 h-16 bg-red-50 border border-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4 text-red-500">
+                <FaLock className="text-2xl" />
+              </div>
+              <h3
+                id="study-buddy-denied-title"
+                className="text-2xl font-bold text-gray-800 mb-2"
+              >
+                Access denied
+              </h3>
+              <p id="study-buddy-denied-desc" className="text-gray-600 text-sm leading-relaxed">
+                Study Buddy rooms can only be joined with the host&apos;s invite link. Opening the room from the main list is not allowed.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setStudyBuddyAccessDenied(false)}
+              className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-3.5 rounded-xl font-bold hover:shadow-lg hover:shadow-blue-500/30 transition"
+            >
+              Got it
+            </button>
+          </div>
+          <style>
+            {`
+              .animate-fadeIn { animation: fhFadeIn 0.25s ease-out; }
+              @keyframes fhFadeIn { from { opacity: 0; } to { opacity: 1; } }
+              .animate-slideUp { animation: fhSlideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1); }
+              @keyframes fhSlideUp {
+                from { opacity: 0; transform: translateY(28px); }
+                to { opacity: 1; transform: translateY(0); }
+              }
+            `}
+          </style>
+        </div>
+      )}
+      <StudyRoomList
+        user={profile}
+        onSelectRoom={handleSelectRoom}
+        onLogout={handleLogout}
+        onEditProfile={() => setEditingProfile(true)}
+        onCreateRoom={handleCreateRoom}
+        onOpenStudyBuddyRoom={handleCreateStudyBuddy}
+        onShowStats={() => setViewingStats(true)}
+        onShowFlashcards={() => setViewingFlashcards(true)}
+        onShowAdmin={() => setViewingAdmin(true)}
+      />
+    </>
   );
 }

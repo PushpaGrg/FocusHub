@@ -3,7 +3,8 @@ import { useState, useEffect, useRef, memo } from "react";
 import { db, auth } from "../firebase";
 import {
   collection, doc, deleteDoc, getDocs, addDoc, query, orderBy, onSnapshot,
-  serverTimestamp, setDoc, where, updateDoc, increment, arrayUnion, getDoc, arrayRemove
+  serverTimestamp, setDoc, where, updateDoc, increment, arrayUnion, getDoc, arrayRemove,
+  deleteField,
 } from "firebase/firestore";
 import { 
   FaArrowLeft, FaEye, FaVideo, FaVideoSlash, FaMicrophone, FaMicrophoneSlash,
@@ -167,9 +168,22 @@ const BreakOverlay = memo(({ isBreak, timeLeft }) => {
   );
 });
 
-const RemoteVideo = memo(function RemoteVideo({ buddy, stream }) {
+const RemoteVideo = memo(function RemoteVideo({ buddy, stream, isHost, mutedByHost, onHostMuteToggle }) {
   return (
     <div className="relative bg-gray-900 rounded-2xl overflow-hidden border border-white/10 w-full h-full group">
+      {isHost && onHostMuteToggle && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onHostMuteToggle(buddy.uid);
+          }}
+          className="absolute top-2 right-2 z-10 p-2 rounded-xl bg-black/70 border border-white/20 text-white hover:bg-red-600/90 transition shadow-lg"
+          title={mutedByHost ? "Unmute participant" : "Mute participant"}
+        >
+          {mutedByHost ? <FaMicrophoneSlash /> : <FaMicrophone />}
+        </button>
+      )}
       <video
         ref={(node) => {
           if (node && stream && node.srcObject !== stream) {
@@ -188,7 +202,8 @@ const RemoteVideo = memo(function RemoteVideo({ buddy, stream }) {
           <p className="text-gray-500 text-[10px] font-bold uppercase tracking-widest">Connecting...</p>
         </div>
       )}
-      <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-lg text-xs font-bold border border-white/10 text-white truncate max-w-[80%]">
+      <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-lg text-xs font-bold border border-white/10 text-white truncate max-w-[80%] flex items-center gap-1.5">
+        {mutedByHost && <FaMicrophoneSlash className="text-red-400 shrink-0" />}
         {buddy.username}
       </div>
     </div>
@@ -226,7 +241,8 @@ const FilmstripTile = memo(function FilmstripTile({ label, stream, videoRef, mut
 });
 
 // video grid for the normal (non-presenting) state
-function VideoGrid({ myVideoRef, camOn, safeUsername, buddies, remoteStreams, user }) {
+function VideoGrid({ myVideoRef, camOn, safeUsername, buddies, remoteStreams, user, isHost, hostMutedMicUids, onHostMuteToggle }) {
+  const hostMutedMe = !!hostMutedMicUids?.[user?.uid];
   const totalCount = 1 + Object.keys(remoteStreams).length;
   const cols = totalCount === 1 ? 1 : totalCount <= 4 ? 2 : 3;
 
@@ -261,11 +277,19 @@ function VideoGrid({ myVideoRef, camOn, safeUsername, buddies, remoteStreams, us
         <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-md px-3 py-1 rounded-lg text-xs font-bold border border-white/10 text-white flex items-center gap-1.5">
           <span className="w-1.5 h-1.5 bg-green-400 rounded-full"></span>
           {safeUsername} (You)
+          {hostMutedMe && <span className="text-red-400 font-extrabold">· Muted by host</span>}
         </div>
       </div>
 
       {buddies.filter(b => b.uid !== user.uid).map((buddy) => (
-        <RemoteVideo key={buddy.uid} buddy={buddy} stream={remoteStreams[buddy.uid]} />
+        <RemoteVideo
+          key={buddy.uid}
+          buddy={buddy}
+          stream={remoteStreams[buddy.uid]}
+          isHost={isHost}
+          mutedByHost={!!hostMutedMicUids?.[buddy.uid]}
+          onHostMuteToggle={onHostMuteToggle}
+        />
       ))}
     </div>
   );
@@ -274,7 +298,12 @@ function VideoGrid({ myVideoRef, camOn, safeUsername, buddies, remoteStreams, us
 // ── This is the bottom hover zone that shows when presenting (resource or quiz)
 // When you hover near the bottom, the filmstrip slides up AND the dock appears
 // When you move away, both hide again
-function PresentingBottomZone({ safeUsername, myVideoRef, camOn, micOn, buddies, remoteStreams, user, isHost, activeQuiz, timerData, setShowTimerModal, toggleMic, toggleCamera, toggleSidePanel, showTasks, showFiles, showChat, setShowQuizPicker, onHoverChange }) {
+function PresentingBottomZone({
+  safeUsername, myVideoRef, camOn, micOn, buddies, remoteStreams, user, isHost, activeQuiz, timerData, setShowTimerModal,
+  toggleMic, toggleCamera, toggleSidePanel, showTasks, showFiles, showChat, setShowQuizPicker, onHoverChange,
+  hostMutedMicUids, onHostMuteToggle,
+}) {
+  const hostMutedMe = !!hostMutedMicUids?.[user?.uid];
   return (
     // the whole bottom area is one hover group — 168px tall
     <div
@@ -306,13 +335,27 @@ function PresentingBottomZone({ safeUsername, myVideoRef, camOn, micOn, buddies,
         />
         {/* everyone else */}
         {buddies.filter(b => b.uid !== user.uid).map((buddy) => (
-          <FilmstripTile
-            key={buddy.uid}
-            label={buddy.username}
-            stream={remoteStreams[buddy.uid]}
-            camOn={true}
-            initial={(buddy.username || "S").charAt(0)}
-          />
+          <div key={buddy.uid} className="relative shrink-0">
+            {isHost && onHostMuteToggle && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onHostMuteToggle(buddy.uid);
+                }}
+                className="absolute top-1 right-1 z-10 p-1.5 rounded-lg bg-black/80 border border-white/20 text-white text-xs hover:bg-red-600/90"
+                title={hostMutedMicUids?.[buddy.uid] ? "Unmute" : "Mute"}
+              >
+                {hostMutedMicUids?.[buddy.uid] ? <FaMicrophoneSlash /> : <FaMicrophone />}
+              </button>
+            )}
+            <FilmstripTile
+              label={buddy.username}
+              stream={remoteStreams[buddy.uid]}
+              camOn={true}
+              initial={(buddy.username || "S").charAt(0)}
+            />
+          </div>
         ))}
       </div>
 
@@ -340,7 +383,14 @@ function PresentingBottomZone({ safeUsername, myVideoRef, camOn, micOn, buddies,
             <div className="w-px bg-white/10 mx-1 hidden sm:block"></div>
           </>
         )}
-        <ControlButton onClick={toggleMic} active={micOn} variant="toggle" icon={micOn ? <FaMicrophone /> : <FaMicrophoneSlash />} label="Mic" />
+        <ControlButton
+          onClick={toggleMic}
+          active={micOn && !hostMutedMe}
+          variant="toggle"
+          icon={hostMutedMe ? <FaMicrophoneSlash /> : micOn ? <FaMicrophone /> : <FaMicrophoneSlash />}
+          label={hostMutedMe ? "Muted by host" : "Mic"}
+          disabled={hostMutedMe}
+        />
         <ControlButton onClick={toggleCamera} active={camOn} variant="toggle" icon={camOn ? <FaVideo /> : <FaVideoSlash />} label="Camera" />
         <div className="w-px bg-white/10 mx-1 sm:mx-2"></div>
         <ControlButton onClick={() => toggleSidePanel("tasks")} active={showTasks} icon={<FaTasks />} label="Goals" />
@@ -365,6 +415,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
   const [camOn, setCamOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
   const [remoteStreams, setRemoteStreams] = useState({});
+  const [hostMutedMicUids, setHostMutedMicUids] = useState({});
   const [peerReady, setPeerReady] = useState(false);
   const [showChat, setShowChat] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
@@ -434,6 +485,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
         if (data.timer) setTimerData(data.timer);
         if (data.activeResource !== undefined) setActiveResource(data.activeResource);
         setBuddies(data.participants || []);
+        setHostMutedMicUids(data.hostMutedMicUids && typeof data.hostMutedMicUids === "object" ? data.hostMutedMicUids : {});
         setSessionStarted(data.sessionStarted || false);
         if (data.activeQuiz) { setActiveQuiz(data.activeQuiz); }
         else { setActiveQuiz(null); setQuizDeckData(null); setSelectedOption(null); }
@@ -584,7 +636,16 @@ export default function StudyBuddyRoom({ room, onBack }) {
 
         sessionStartTime.current = Date.now();
 
-        const peer = new Peer({ config: { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] } });
+        // ICE servers for NAT traversal - includes STUN and TURN for college/corporate networks
+        const iceServers = [
+          { urls: "stun:stun.l.google.com:19302" },
+          { urls: "stun:stun1.l.google.com:19302" },
+          // Free TURN servers for better connectivity on restrictive networks
+          { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+          { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+          { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
+        ];
+        const peer = new Peer({ config: { iceServers } });
         peerRef.current = peer;
 
         peer.on("open", async (id) => {
@@ -675,7 +736,35 @@ export default function StudyBuddyRoom({ room, onBack }) {
     }
   };
 
+  const hostMuteToggle = async (targetUid) => {
+    if (!isHost || !targetUid || targetUid === user.uid) return;
+    try {
+      const muted = !!hostMutedMicUids?.[targetUid];
+      if (muted) {
+        await updateDoc(roomRef, { [`hostMutedMicUids.${targetUid}`]: deleteField() });
+      } else {
+        await updateDoc(roomRef, { [`hostMutedMicUids.${targetUid}`]: true });
+      }
+    } catch (e) {
+      triggerToast("Could not update mute", "error");
+    }
+  };
+
+  useEffect(() => {
+    if (!localStreamRef.current || !sessionStarted) return;
+    const track = localStreamRef.current.getAudioTracks()[0];
+    if (!track) return;
+    if (hostMutedMicUids?.[user.uid]) {
+      track.enabled = false;
+      setMicOn(false);
+    }
+  }, [hostMutedMicUids, user.uid, sessionStarted]);
+
   const toggleMic = () => {
+    if (hostMutedMicUids?.[user.uid]) {
+      triggerToast("The host has muted your microphone", "error");
+      return;
+    }
     if (localStreamRef.current) {
       const track = localStreamRef.current.getAudioTracks()[0];
       if (track) { track.enabled = !micOn; setMicOn(track.enabled); }
@@ -895,6 +984,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
     isHost, activeQuiz, timerData, setShowTimerModal, toggleMic, toggleCamera,
     toggleSidePanel, showTasks, showFiles, showChat, setShowQuizPicker,
     onHoverChange: setIsBottomHovered,
+    hostMutedMicUids, onHostMuteToggle: hostMuteToggle,
   };
 
   // ─────────────────────────── LOBBY ───────────────────────────
@@ -920,12 +1010,23 @@ export default function StudyBuddyRoom({ room, onBack }) {
             </h3>
             <div className="bg-gray-50/80 rounded-2xl p-4 max-h-48 overflow-y-auto border border-gray-100 space-y-2">
               {buddies.map((b) => (
-                <div key={b.uid} className="flex items-center justify-between bg-white rounded-xl px-4 py-3 shadow-sm">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-purple-400 flex items-center justify-center text-white text-xs font-bold shadow-md">{(b.username || "S").charAt(0).toUpperCase()}</div>
-                    <span className="font-semibold text-gray-700 text-sm">{b.username || "Student"}</span>
+                <div key={b.uid} className="flex items-center justify-between bg-white rounded-xl px-4 py-3 shadow-sm gap-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-purple-400 flex items-center justify-center text-white text-xs font-bold shadow-md shrink-0">{(b.username || "S").charAt(0).toUpperCase()}</div>
+                    <span className="font-semibold text-gray-700 text-sm truncate">{b.username || "Student"}</span>
                   </div>
-                  {b.uid === room.createdBy && <span className="bg-yellow-100 text-yellow-700 text-[10px] px-2 py-1 rounded-md font-extrabold uppercase tracking-wide">Host</span>}
+                  <div className="flex items-center gap-2 shrink-0">
+                    {b.uid === room.createdBy && <span className="bg-yellow-100 text-yellow-700 text-[10px] px-2 py-1 rounded-md font-extrabold uppercase tracking-wide">Host</span>}
+                    {isHost && b.uid !== user.uid && (
+                      <button
+                        type="button"
+                        onClick={() => hostMuteToggle(b.uid)}
+                        className={`text-xs font-bold px-2.5 py-1 rounded-lg border transition ${hostMutedMicUids?.[b.uid] ? "bg-green-50 text-green-700 border-green-200" : "bg-red-50 text-red-600 border-red-100"}`}
+                      >
+                        {hostMutedMicUids?.[b.uid] ? "Unmute" : "Mute"}
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -1032,7 +1133,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
         {activeQuiz && currentQuizCard ? (
           <div
             className="flex-1 flex flex-col items-center justify-center p-8 relative overflow-hidden bg-gray-900 pt-20 transition-all duration-300"
-            style={{ paddingBottom: isBottomHovered ? 176 : 32 }}
+            style={{ paddingBottom: isBottomHovered ? 350 : 120 }}
           >
             <div className="flex flex-col items-center mb-6 z-10">
               <div className="bg-purple-600 px-4 py-1.5 rounded-full text-xs font-bold uppercase tracking-widest animate-pulse shadow-lg mb-2">Live Group Quiz</div>
@@ -1068,7 +1169,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
             {isHost && (
               <div
                 className="absolute flex gap-4 bg-black/60 backdrop-blur-md p-4 rounded-3xl border border-white/10 shadow-2xl z-20 transition-all duration-300"
-                style={{ bottom: isBottomHovered ? 180 : 36 }}
+                style={{ bottom: isBottomHovered ? 280 : 140 }}
               >
                 {!activeQuiz.isRevealed ? (
                   <button onClick={revealAnswer} className="px-6 py-3 bg-green-500 text-white rounded-xl font-bold hover:bg-green-400 transition flex items-center gap-2"><FaCheckIcon /> Reveal</button>
@@ -1117,6 +1218,9 @@ export default function StudyBuddyRoom({ room, onBack }) {
               buddies={buddies}
               remoteStreams={remoteStreams}
               user={user}
+              isHost={isHost}
+              hostMutedMicUids={hostMutedMicUids}
+              onHostMuteToggle={hostMuteToggle}
             />
           </div>
         )}
@@ -1138,7 +1242,14 @@ export default function StudyBuddyRoom({ room, onBack }) {
                 <div className="w-px bg-white/10 mx-1 hidden sm:block"></div>
               </>
             )}
-            <ControlButton onClick={toggleMic} active={micOn} variant="toggle" icon={micOn ? <FaMicrophone /> : <FaMicrophoneSlash />} label="Mic" />
+            <ControlButton
+              onClick={toggleMic}
+              active={micOn && !hostMutedMicUids?.[user.uid]}
+              variant="toggle"
+              icon={hostMutedMicUids?.[user.uid] ? <FaMicrophoneSlash /> : micOn ? <FaMicrophone /> : <FaMicrophoneSlash />}
+              label={hostMutedMicUids?.[user.uid] ? "Muted by host" : "Mic"}
+              disabled={!!hostMutedMicUids?.[user.uid]}
+            />
             <ControlButton onClick={toggleCamera} active={camOn} variant="toggle" icon={camOn ? <FaVideo /> : <FaVideoSlash />} label="Camera" />
             <div className="w-px bg-white/10 mx-1 sm:mx-2"></div>
             <ControlButton onClick={() => toggleSidePanel("tasks")} active={showTasks} icon={<FaTasks />} label="Goals" />
