@@ -163,12 +163,60 @@ export default function RoomMessages({ room, onBack }) {
   const [showTasks, setShowTasks] = useState(false); 
   
   const [resources, setResources] = useState([]);
-  const [newResourceLink, setNewResourceLink] = useState("");
-  const [newResourceName, setNewResourceName] = useState("");
-  const [isAddingResource, setIsAddingResource] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [activeResource, setActiveResource] = useState(null); 
+  const [aiMessages, setAiMessages] = useState([]);
+  const [aiInput, setAiInput] = useState("");
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [activeResource, setActiveResource] = useState(null);
+  const [aiSectionHeight, setAiSectionHeight] = useState(40); // Percentage height for AI section (10-90%)
+  const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef(null);
+  const sidebarRef = useRef(null);
+  const containerRef = useRef(null); // Ref for the entire files panel container
+  const dragStartY = useRef(0);
+  const dragStartHeight = useRef(0);
+  const containerHeightRef = useRef(0);
+
+  // Handle mouse down on the resize divider
+  const handleMouseDown = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+    dragStartY.current = e.clientY;
+    dragStartHeight.current = aiSectionHeight;
+    
+    // Calculate available height based on window height minus header
+    // The side panel takes full height, so we use window.innerHeight
+    const headerHeight = 73; // height of the header div
+    const availableHeight = window.innerHeight - headerHeight;
+    containerHeightRef.current = availableHeight;
+    
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  };
+
+  // Handle mouse move for resizing
+  const handleMouseMove = (e) => {
+    if (!isDragging || containerHeightRef.current === 0) return;
+    
+    const deltaY = e.clientY - dragStartY.current;
+    // Calculate the percentage change based on the available height
+    // Since the AI section height is a percentage of the side panel height,
+    // we need to calculate how much the mouse moved as a percentage of the total height
+    const deltaPercent = (deltaY / containerHeightRef.current) * 100;
+    let newHeight = dragStartHeight.current + deltaPercent;
+    // Clamp between 10% and 90%
+    newHeight = Math.max(10, Math.min(90, newHeight));
+    setAiSectionHeight(newHeight);
+  };
+
+  // Handle mouse up to stop dragging
+  const handleMouseUp = () => {
+    setIsDragging(false);
+    containerHeightRef.current = 0;
+    document.removeEventListener('mousemove', handleMouseMove);
+    document.removeEventListener('mouseup', handleMouseUp);
+  };
 
   const [tasks, setTasks] = useState([]);
   const [newTaskText, setNewTaskText] = useState("");
@@ -505,20 +553,43 @@ export default function RoomMessages({ room, onBack }) {
     });
   };
 
-  const handleAddResource = async (e) => {
+  const handleAiSubmit = async (e) => {
     e.preventDefault();
-    if (!newResourceLink.trim() || !newResourceName.trim()) return;
+    if (!aiInput.trim()) return;
+
+    const API_KEY = import.meta.env.VITE_GROQ_API_KEY; // Use your new Groq key
+    if (!API_KEY) {
+      setAiMessages(prev => [...prev, { role: 'ai', content: "🔑 API Key Missing: Add VITE_GROQ_API_KEY to .env" }]);
+      return;
+    }
+
+    const userMessage = { role: 'user', content: aiInput.trim() };
+    setAiMessages(prev => [...prev, userMessage]);
+    setAiInput("");
+    setIsAiLoading(true);
+
     try {
-      const isApproved = isHost ? true : false;
-      await addDoc(collection(db, "room_resources"), {
-        roomId: room.id, name: newResourceName.trim(), url: newResourceLink.trim(), type: "link", 
-        addedBy: user.email.split("@")[0], createdAt: serverTimestamp(), approved: isApproved
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${API_KEY}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile", // This is a very smart, free model
+          messages: [{ role: "user", content: aiInput.trim() }]
+        })
       });
-      uploadsCount.current += 1;
-      if (isHost) { triggerToast("Link added!", "success"); } 
-      else triggerToast("Sent for approval", "info");
-      setNewResourceLink(""); setNewResourceName(""); setIsAddingResource(false);
-    } catch (err) { triggerToast("Error adding link", "error"); }
+
+      const data = await response.json();
+      const aiResponse = data.choices[0].message.content;
+      setAiMessages(prev => [...prev, { role: 'ai', content: aiResponse }]);
+    } catch (error) {
+      console.error('AI API Error:', error);
+      setAiMessages(prev => [...prev, { role: 'ai', content: "Connection error. Please try again." }]);
+    } finally {
+      setIsAiLoading(false);
+    }
   };
 
   const handleFileUpload = (e) => {
@@ -1159,68 +1230,149 @@ export default function RoomMessages({ room, onBack }) {
           {showFiles && (
             <>
               <div className="p-5 border-b border-gray-100 bg-white flex justify-between items-center">
-                <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2"><FaPaperclip /> Resources</h3>
+                <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2"><FaPaperclip /> AI Assistant & Resources</h3>
                 <button onClick={() => setShowFiles(false)} className="text-gray-400 hover:text-gray-600"><FaTimes /></button>
               </div>
-              <div className="flex-1 p-5 overflow-y-auto space-y-3 bg-gray-50/50">
-                {isHost && resources.filter(r => !r.approved).length > 0 && (
-                  <div className="mb-6 animate-fadeIn">
-                    <h4 className="text-xs font-extrabold text-orange-600 uppercase tracking-widest mb-3 flex items-center gap-2"><FaClock /> Pending Approval</h4>
-                    {resources.filter(r => !r.approved).map(res => (
-                      <div key={res.id} className="bg-orange-50/50 p-4 rounded-xl border border-orange-200 mb-3">
-                        <div className="flex justify-between items-start mb-2">
-                          <span className="text-sm font-bold text-gray-800 truncate w-32">{res.name}</span>
-                          <div className="flex gap-2">
-                            <button onClick={() => handleApproveResource(res.id)} className="bg-green-100 text-green-600 p-2 rounded-lg hover:bg-green-200 transition"><FaCheckCircle size={14} /></button>
-                            <button onClick={() => handleDeleteResource(res.id)} className="bg-red-100 text-red-500 p-2 rounded-lg hover:bg-red-200 transition"><FaTrash size={12} /></button>
-                          </div>
+              
+              {/* AI Chat Section - Top (Resizable) */}
+              <div ref={sidebarRef} className="flex flex-col files-panel-container" style={{ height: `${aiSectionHeight}%` }}>
+                <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gradient-to-b from-blue-50/30 to-white min-h-0">
+                  <div className="text-center mb-3">
+                    <div className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-500 to-purple-600 text-white px-4 py-1.5 rounded-full text-xs font-bold shadow-md">
+                      <FaBrain size={12} /> AI Study Assistant
+                    </div>
+                  </div>
+                  {aiMessages.length === 0 && (
+                    <div className="text-center py-8">
+                      <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-3">
+                        <FaBrain className="text-blue-500 text-2xl" />
+                      </div>
+                      <p className="text-gray-500 text-sm font-medium">Ask me anything!</p>
+                      <p className="text-gray-400 text-xs mt-1">I can help with any question - study, general knowledge, and more</p>
+                    </div>
+                  )}
+                  {aiMessages.map((msg, idx) => (
+                    <div key={idx} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[85%] p-3 rounded-2xl ${
+                        msg.role === 'user' 
+                          ? 'bg-blue-600 text-white rounded-br-none' 
+                          : 'bg-white border border-gray-200 text-gray-700 rounded-bl-none shadow-sm'
+                      }`}>
+                        <p className="text-sm leading-relaxed">{msg.content}</p>
+                      </div>
+                    </div>
+                  ))}
+                  {isAiLoading && (
+                    <div className="flex justify-start">
+                      <div className="bg-white border border-gray-200 p-3 rounded-2xl rounded-bl-none shadow-sm">
+                        <div className="flex gap-2">
+                          <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                          <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                          <div className="w-2 h-2 bg-blue-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
                         </div>
-                        <p className="text-[10px] text-gray-500">From: {res.addedBy}</p>
-                      </div>
-                    ))}
-                    <div className="h-px bg-gray-200 my-4"></div>
-                  </div>
-                )}
-                {resources.filter(r => r.approved).length === 0 && !isAddingResource && <div className="text-center text-gray-400 mt-10">No resources yet.</div>}
-                {resources.filter(r => r.approved).map(res => (
-                  <div key={res.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 group hover:shadow-md transition-all mb-3">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-3 overflow-hidden">
-                        <div className="bg-blue-50 p-2.5 rounded-xl text-blue-600">{res.type === 'link' ? <FaLink /> : (res.type && res.type.includes('image') ? <FaImage /> : <FaFilePdf />)}</div>
-                        <div className="truncate"><p className="text-sm font-bold text-gray-800 truncate w-32" title={res.name}>{res.name}</p><p className="text-[10px] text-gray-400">By {res.addedBy}</p></div>
-                      </div>
-                      <div className="flex gap-1">
-                        {isHost && (
-                          <>
-                            <button onClick={() => handlePresentResource(res)} className="text-gray-400 hover:text-blue-600 p-2"><FaEye /></button>
-                            <button onClick={() => handleDeleteResource(res.id)} className="text-gray-400 hover:text-red-500 p-2"><FaTrash size={12}/></button>
-                          </>
-                        )}
-                        {!isHost && (res.type === 'link' ? 
-                          <a href={res.url} target="_blank" rel="noreferrer" className="text-gray-400 hover:text-blue-600 p-2"><FaExternalLinkAlt /></a> : 
-                          <a href={res.data} download={res.name} className="text-gray-400 hover:text-blue-600 p-2"><FaDownload /></a>
-                        )}
                       </div>
                     </div>
-                    {res.type && res.type.includes('image') && <img src={res.data} alt="preview" className="w-full h-32 object-cover rounded-lg border border-gray-100 mt-2 cursor-pointer hover:opacity-90" onClick={() => isHost && handlePresentResource(res)} />}
+                  )}
+                </div>
+                <form onSubmit={handleAiSubmit} className="p-3 border-t border-gray-100 bg-white">
+                  <div className="flex gap-2">
+                    <input 
+                      value={aiInput} 
+                      onChange={e => setAiInput(e.target.value)} 
+                      placeholder="Ask anything..." 
+                      className="flex-1 px-4 py-2.5 border border-gray-200 rounded-full bg-gray-50 outline-none text-sm focus:border-blue-400 focus:ring-1 focus:ring-blue-200 transition-all"
+                      disabled={isAiLoading}
+                    />
+                    <button 
+                      type="submit" 
+                      disabled={isAiLoading || !aiInput.trim()}
+                      className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2.5 rounded-full disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg transition-all flex items-center gap-2 text-sm font-bold"
+                    >
+                      <FaPaperPlane size={12} />
+                    </button>
                   </div>
-                ))}
-                {isAddingResource && (
-                  <form onSubmit={handleAddResource} className="bg-white p-4 rounded-xl shadow-lg border border-blue-100 mb-4 animate-slideUp">
-                    <h5 className="text-xs font-bold text-gray-500 uppercase mb-3">Add New Link</h5>
-                    <input value={newResourceName} onChange={e => setNewResourceName(e.target.value)} placeholder="Title" className="w-full mb-3 p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm" autoFocus />
-                    <input value={newResourceLink} onChange={e => setNewResourceLink(e.target.value)} placeholder="Paste URL" className="w-full mb-4 p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm" />
-                    <div className="flex gap-2">
-                      <button type="button" onClick={() => setIsAddingResource(false)} className="flex-1 bg-gray-100 text-gray-600 py-2 rounded-lg text-xs font-bold">Cancel</button>
-                      <button type="submit" className="flex-1 bg-blue-600 text-white py-2 rounded-lg text-xs font-bold">Add</button>
-                    </div>
-                  </form>
-                )}
+                </form>
               </div>
-              <div className="p-4 border-t border-gray-100 bg-white grid grid-cols-2 gap-3">
-                <button onClick={() => setIsAddingResource(true)} className="bg-gray-50 text-gray-700 py-3 rounded-xl font-bold hover:bg-gray-100 transition flex items-center justify-center gap-2 text-xs border border-gray-200"><FaPlus /> Add Link</button>
-                <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept="image/*,application/pdf" />
-                <button onClick={triggerFileInput} disabled={isUploading} className="bg-gradient-to-r from-gray-900 to-gray-800 text-white py-3 rounded-xl font-bold hover:shadow-lg transition flex items-center justify-center gap-2 text-xs disabled:opacity-70">{isUploading ? "Uploading..." : <><FaCloudUploadAlt /> Upload File</>}</button>
+
+              {/* Resizable Divider */}
+              <div
+                onMouseDown={handleMouseDown}
+                className={`h-2 cursor-ns-resize flex items-center justify-center relative z-10 ${
+                  isDragging ? 'bg-blue-500' : 'bg-gray-200 hover:bg-blue-400'
+                } transition-colors duration-150`}
+                style={{ minHeight: '8px' }}
+              >
+                <div className={`w-12 h-1 rounded-full ${
+                  isDragging ? 'bg-white' : 'bg-gray-400'
+                } transition-colors duration-150`}></div>
+              </div>
+
+              {/* File Upload Section - Bottom (Original Functionality) */}
+              <div className="flex-1 flex flex-col min-h-0">
+                <div className="flex-1 overflow-y-auto p-5 space-y-3 bg-gray-50/50">
+                  {/* Pending Approval Section (Host Only) */}
+                  {isHost && resources.filter(r => !r.approved).length > 0 && (
+                    <div className="mb-6 animate-fadeIn">
+                      <h4 className="text-xs font-extrabold text-orange-600 uppercase tracking-widest mb-3 flex items-center gap-2"><FaClock /> Pending Approval</h4>
+                      {resources.filter(r => !r.approved).map(res => (
+                        <div key={res.id} className="bg-orange-50/50 p-4 rounded-xl border border-orange-200 mb-3">
+                          <div className="flex justify-between items-start mb-2">
+                            <span className="text-sm font-bold text-gray-800 truncate w-32">{res.name}</span>
+                            <div className="flex gap-2">
+                              <button onClick={() => handleApproveResource(res.id)} className="bg-green-100 text-green-600 p-2 rounded-lg hover:bg-green-200 transition"><FaCheckCircle size={14} /></button>
+                              <button onClick={() => handleDeleteResource(res.id)} className="bg-red-100 text-red-500 p-2 rounded-lg hover:bg-red-200 transition"><FaTrash size={12} /></button>
+                            </div>
+                          </div>
+                          <p className="text-[10px] text-gray-500">From: {res.addedBy}</p>
+                        </div>
+                      ))}
+                      <div className="h-px bg-gray-200 my-4"></div>
+                    </div>
+                  )}
+
+                  {/* Approved Resources */}
+                  {resources.filter(r => r.approved).length === 0 && <div className="text-center text-gray-400 mt-10">No resources yet.</div>}
+                  {resources.filter(r => r.approved).map(res => (
+                    <div key={res.id} className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 group hover:shadow-md transition-all mb-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-3 overflow-hidden">
+                          <div className="bg-blue-50 p-2.5 rounded-xl text-blue-600">{res.type === 'link' ? <FaLink /> : (res.type && res.type.includes('image') ? <FaImage /> : <FaFilePdf />)}</div>
+                          <div className="truncate"><p className="text-sm font-bold text-gray-800 truncate w-32" title={res.name}>{res.name}</p><p className="text-[10px] text-gray-400">By {res.addedBy}</p></div>
+                        </div>
+                        <div className="flex gap-1">
+                          {isHost && (
+                            <>
+                              <button onClick={() => handlePresentResource(res)} className="text-gray-400 hover:text-blue-600 p-2"><FaEye /></button>
+                              <button onClick={() => handleDeleteResource(res.id)} className="text-gray-400 hover:text-red-500 p-2"><FaTrash size={12}/></button>
+                            </>
+                          )}
+                          {!isHost && (res.type === 'link' ? 
+                            <a href={res.url} target="_blank" rel="noreferrer" className="text-gray-400 hover:text-blue-600 p-2"><FaExternalLinkAlt /></a> : 
+                            <a href={res.data} download={res.name} className="text-gray-400 hover:text-blue-600 p-2"><FaDownload /></a>
+                          )}
+                        </div>
+                      </div>
+                      {res.type && res.type.includes('image') && <img src={res.data} alt="preview" className="w-full h-32 object-cover rounded-lg border border-gray-100 mt-2 cursor-pointer hover:opacity-90" onClick={() => isHost && handlePresentResource(res)} />}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Upload Button Area */}
+                <div className="p-4 border-t border-gray-100 bg-white">
+                  <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept="image/*,application/pdf" />
+                  <button onClick={triggerFileInput} disabled={isUploading} className="w-full bg-gradient-to-r from-gray-900 to-gray-800 text-white py-3 rounded-xl font-bold hover:shadow-lg transition flex items-center justify-center gap-2 text-xs disabled:opacity-70">
+                    {isUploading ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                        Uploading...
+                      </>
+                    ) : (
+                      <>
+                        <FaCloudUploadAlt /> Upload File (Images, PDF)
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
             </>
           )}
