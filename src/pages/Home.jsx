@@ -21,16 +21,6 @@ export default function Home({ onGuest, onLoginClick }) {
   const [slides, setSlides] = useState([]);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [isScrolled, setIsScrolled] = useState(false);
-  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
-
-  // Mouse tracking for 3D effects
-  useEffect(() => {
-    const handleMouseMove = (e) => {
-      setMousePosition({ x: e.clientX, y: e.clientY });
-    };
-    window.addEventListener('mousemove', handleMouseMove);
-    return () => window.removeEventListener('mousemove', handleMouseMove);
-  }, []);
 
   // Navbar scroll effect
   useEffect(() => {
@@ -45,11 +35,18 @@ export default function Home({ onGuest, onLoginClick }) {
   useEffect(() => {
     const docRef = doc(db, "app_config", "homepage");
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
-      if (docSnap.exists() && docSnap.data().heroSlides?.length > 0) {
-        setSlides(docSnap.data().heroSlides);
+      const heroSlides = docSnap.exists() && Array.isArray(docSnap.data().heroSlides)
+        ? docSnap.data().heroSlides.filter(slide => slide?.title || slide?.subtitle || slide?.url)
+        : [];
+      if (heroSlides.length > 0) {
+        setSlides(heroSlides);
       } else {
         setSlides([FALLBACK_SLIDE]);
       }
+      setCurrentIdx(0);
+    }, () => {
+      setSlides([FALLBACK_SLIDE]);
+      setCurrentIdx(0);
     });
     return () => unsubscribe();
   }, []);
@@ -64,6 +61,10 @@ export default function Home({ onGuest, onLoginClick }) {
   }, [slides.length]);
 
   const activeSlide = slides[currentIdx] || FALLBACK_SLIDE;
+  const activeSlideUrl = activeSlide?.url || "";
+  const activeSlideType = activeSlideUrl && ["image", "video"].includes(activeSlide?.type) ? activeSlide.type : "gradient";
+  const heroTitle = activeSlide?.title || FALLBACK_SLIDE.title;
+  const heroSubtitle = activeSlide?.subtitle || FALLBACK_SLIDE.subtitle;
 
   return (
     <div className="font-sans relative overflow-x-hidden">
@@ -73,7 +74,7 @@ export default function Home({ onGuest, onLoginClick }) {
           ? 'bg-white/90 backdrop-blur-xl shadow-lg border-b border-white/20' 
           : 'bg-white/10 backdrop-blur-md border-b border-white/10'
       }`}>
-        <div className="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex justify-between items-center gap-3">
           <div className="flex items-center gap-2">
             <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
               <FaBrain className="text-white text-lg" />
@@ -84,7 +85,7 @@ export default function Home({ onGuest, onLoginClick }) {
           </div>
           
           <div className="space-x-8 hidden lg:flex text-sm font-medium">
-            {['Features', 'Reviews', 'Contact'].map((item, i) => (
+            {['Features', 'Reviews', 'Contact'].map((item) => (
               <a 
                 key={item}
                 href={`#${item.toLowerCase()}`} 
@@ -98,10 +99,10 @@ export default function Home({ onGuest, onLoginClick }) {
             ))}
           </div>
           
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4">
             <button 
               onClick={onGuest}
-              className={`px-4 py-2 rounded-xl font-medium transition-all ${
+              className={`hidden sm:inline-flex px-4 py-2 rounded-xl font-medium transition-all ${
                 isScrolled 
                   ? 'text-gray-600 hover:text-blue-600 border border-gray-300 hover:border-blue-300' 
                   : 'text-white/90 hover:text-white border border-white/30 hover:border-white/60'
@@ -111,7 +112,7 @@ export default function Home({ onGuest, onLoginClick }) {
             </button>
             <button 
               onClick={onLoginClick} 
-              className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-2.5 rounded-xl font-semibold hover:shadow-xl hover:shadow-blue-500/30 transition-all transform hover:scale-105 active:scale-95 shadow-lg"
+              className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 sm:px-6 py-2.5 rounded-xl font-semibold hover:shadow-xl hover:shadow-blue-500/30 transition-all transform hover:scale-105 active:scale-95 shadow-lg whitespace-nowrap"
             >
               Get Started
             </button>
@@ -123,10 +124,10 @@ export default function Home({ onGuest, onLoginClick }) {
       <section className="relative min-h-screen flex items-center justify-center overflow-hidden">
         {/* Dynamic Background with Enhanced Effects */}
         <div className="absolute inset-0 z-0">
-          {activeSlide.type === 'video' ? (
-            <video key={activeSlide.url} src={activeSlide.url} autoPlay muted loop playsInline className="w-full h-full object-cover" />
-          ) : activeSlide.type === 'image' ? (
-            <img key={activeSlide.url} src={activeSlide.url} alt="Background" className="w-full h-full object-cover" />
+          {activeSlideType === 'video' && activeSlideUrl ? (
+            <video key={activeSlideUrl} src={activeSlideUrl} autoPlay muted loop playsInline className="w-full h-full object-cover" />
+          ) : activeSlideType === 'image' && activeSlideUrl ? (
+            <img key={activeSlideUrl} src={activeSlideUrl} alt="FocusHub study background" className="w-full h-full object-cover" />
           ) : (
             <div className="absolute inset-0 bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-600">
               {/* Enhanced animated background elements */}
@@ -137,21 +138,12 @@ export default function Home({ onGuest, onLoginClick }) {
               {/* Grid pattern */}
               <div className="absolute inset-0 bg-grid-pattern opacity-10"></div>
               
-              {/* Mouse-following spotlight effect */}
-              <div 
-                className="absolute w-96 h-96 rounded-full bg-white/5 pointer-events-none"
-                style={{
-                  left: mousePosition.x - 192,
-                  top: mousePosition.y - 192,
-                  background: 'radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%)'
-                }}
-              />
             </div>
           )}
           
           {/* Enhanced overlay */}
           <div className={`absolute inset-0 ${
-            activeSlide.type === 'gradient' 
+            activeSlideType === 'gradient' 
               ? 'bg-gradient-to-b from-transparent via-black/20 to-black/40' 
               : 'bg-gradient-to-b from-black/70 via-black/50 to-black/80'
           }`} />
@@ -167,13 +159,13 @@ export default function Home({ onGuest, onLoginClick }) {
             </div>
             
             {/* Main Title */}
-            <h1 className="text-6xl md:text-8xl font-black mb-8 bg-gradient-to-r from-white via-blue-100 to-purple-100 bg-clip-text text-transparent leading-tight tracking-tight">
-              {activeSlide.title}
+            <h1 className="text-5xl sm:text-6xl md:text-8xl font-black mb-8 bg-gradient-to-r from-white via-blue-100 to-purple-100 bg-clip-text text-transparent leading-tight tracking-tight break-words">
+              {heroTitle}
             </h1>
             
             {/* Enhanced Subtitle */}
             <p className="text-xl md:text-2xl text-white/90 max-w-3xl mx-auto mb-12 leading-relaxed font-light">
-              {activeSlide.subtitle}
+              {heroSubtitle}
             </p>
             
             {/* Enhanced CTA Buttons */}
@@ -201,7 +193,7 @@ export default function Home({ onGuest, onLoginClick }) {
             </div>
 
             {/* Stats Bar */}
-            <div className="grid grid-cols-3 gap-8 max-w-2xl mx-auto">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5 sm:gap-8 max-w-2xl mx-auto">
               {[
                 { number: '10K+', label: 'Active Students' },
                 { number: '95%', label: 'Success Rate' },
@@ -218,7 +210,7 @@ export default function Home({ onGuest, onLoginClick }) {
 
         {/* Enhanced Slider Indicators */}
         {slides.length > 1 && (
-          <div className="absolute bottom-10 flex gap-3 z-10">
+          <div className="absolute bottom-24 flex gap-3 z-10">
             {slides.map((_, index) => (
               <button
                 key={index}
@@ -233,12 +225,6 @@ export default function Home({ onGuest, onLoginClick }) {
           </div>
         )}
 
-        {/* Scroll Indicator */}
-        <div className="absolute bottom-10 left-1/2 transform -translate-x-1/2 z-10 animate-bounce">
-          <div className="w-6 h-10 border-2 border-white/30 rounded-full flex justify-center">
-            <div className="w-1 h-3 bg-white/60 rounded-full mt-2 animate-pulse"></div>
-          </div>
-        </div>
       </section>
 
       {/* Enhanced Features Section */}
@@ -497,7 +483,7 @@ export default function Home({ onGuest, onLoginClick }) {
           {/* Footer */}
           <div className="border-t border-white/10 pt-8">
             <p className="text-white/60 text-sm">
-              2025 FocusHub. Made with for students worldwide.
+              2025 FocusHub. Made for students worldwide.
             </p>
           </div>
         </div>

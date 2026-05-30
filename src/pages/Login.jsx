@@ -52,7 +52,7 @@ const SuccessDialog = ({ message, onClose }) => (
   </div>
 );
 
-const ForgotPasswordDialog = ({ isOpen, onClose, email, onSendReset }) => (
+const ForgotPasswordDialog = ({ isOpen, onClose, email, onEmailChange, onSendReset, isSending }) => (
   <div className={`fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-sm transition-opacity ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
     <div className={`bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full border border-gray-200 transition-all ${isOpen ? 'scale-100 opacity-100' : 'scale-95 opacity-0'}`}>
       <div className="text-center mb-6">
@@ -71,8 +71,9 @@ const ForgotPasswordDialog = ({ isOpen, onClose, email, onSendReset }) => (
           <input
             type="email"
             value={email}
-            onChange={(e) => onSendReset(e.target.value)}
+            onChange={(e) => onEmailChange(e.target.value)}
             placeholder="Enter your email"
+            disabled={isSending}
             className="w-full pl-11 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 focus:outline-none transition-all"
           />
         </div>
@@ -80,15 +81,17 @@ const ForgotPasswordDialog = ({ isOpen, onClose, email, onSendReset }) => (
         <div className="flex gap-3">
           <button
             onClick={onClose}
+            disabled={isSending}
             className="flex-1 px-4 py-3 border border-gray-300 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors font-semibold"
           >
             Cancel
           </button>
           <button
-            onClick={() => onSendReset(email)}
-            className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all font-semibold"
+            onClick={onSendReset}
+            disabled={isSending}
+            className="flex-1 px-4 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
           >
-            Send Reset Link
+            {isSending ? "Sending..." : "Send Reset Link"}
           </button>
         </div>
       </div>
@@ -106,13 +109,12 @@ export default function Login({ onLogin, onBack }) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
   const [errorDialog, setErrorDialog] = useState(null);
   const [successDialog, setSuccessDialog] = useState(null);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [passwordStrength, setPasswordStrength] = useState({ score: 0, feedback: [] });
   const [isLoading, setIsLoading] = useState(false);
+  const [isSendingReset, setIsSendingReset] = useState(false);
 
   // Password strength checker
   const checkPasswordStrength = (password) => {
@@ -214,8 +216,6 @@ export default function Login({ onLogin, onBack }) {
     if (!validateForm()) return;
 
     setIsLoading(true);
-    setError("");
-    setMessage("");
 
     try {
       if (isSignup) {
@@ -293,7 +293,9 @@ export default function Login({ onLogin, onBack }) {
     }
   };
 
-  const handlePasswordReset = async (resetEmail = email) => {
+  const handlePasswordReset = async () => {
+    const resetEmail = email.trim();
+
     if (!resetEmail) {
       setErrorDialog("Please enter your email address");
       return;
@@ -305,11 +307,28 @@ export default function Login({ onLogin, onBack }) {
     }
 
     try {
+      setIsSendingReset(true);
       await sendPasswordResetEmail(auth, resetEmail);
       setSuccessDialog("✅ Password reset email sent! Please check your inbox for the reset link.");
       setShowForgotPassword(false);
     } catch (err) {
-      setErrorDialog("Failed to send password reset email. Please try again.");
+      let errorMessage = "Failed to send password reset email. Please try again.";
+      switch (err.code) {
+        case "auth/invalid-email":
+          errorMessage = "Please enter a valid email address.";
+          break;
+        case "auth/user-not-found":
+          errorMessage = "No account found with this email address.";
+          break;
+        case "auth/too-many-requests":
+          errorMessage = "Too many reset attempts. Please try again later.";
+          break;
+        default:
+          errorMessage = err.message || errorMessage;
+      }
+      setErrorDialog(errorMessage);
+    } finally {
+      setIsSendingReset(false);
     }
   };
 
@@ -527,8 +546,6 @@ export default function Login({ onLogin, onBack }) {
               <button
                 onClick={() => { 
                   setIsSignup(!isSignup); 
-                  setError(""); 
-                  setMessage(""); 
                   setPassword("");
                   setConfirmPassword("");
                   setPasswordStrength({ score: 0, feedback: [] });
@@ -562,13 +579,9 @@ export default function Login({ onLogin, onBack }) {
           isOpen={showForgotPassword}
           onClose={() => setShowForgotPassword(false)}
           email={email}
-          onSendReset={(resetEmail) => {
-            if (typeof resetEmail === 'string') {
-              setEmail(resetEmail);
-            } else {
-              handlePasswordReset();
-            }
-          }}
+          onEmailChange={setEmail}
+          onSendReset={handlePasswordReset}
+          isSending={isSendingReset}
         />
       )}
 

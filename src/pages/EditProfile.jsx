@@ -42,16 +42,17 @@ const SuccessDialog = ({ message, onClose }) => (
 
 export default function EditProfile({ user, onSave, onCancel }) {
   const [profileData, setProfileData] = useState({ 
-    username: user?.username || "",
-    fullName: user?.fullName || "",
-    fieldOfStudy: user?.fieldOfStudy || "",
-    email: user?.email || "",
-    bio: user?.bio || "",
-    studyPreferences: user?.studyPreferences || "",
+    username: String(user?.username || ""),
+    fullName: String(user?.fullName || ""),
+    fieldOfStudy: String(user?.fieldOfStudy || ""),
+    email: String(user?.email || ""),
+    bio: String(user?.bio || ""),
+    studyPreferences: String(user?.studyPreferences || ""),
     photoBase64: user?.photoBase64 || null
   });
   
   const [errors, setErrors] = useState({});
+  const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
@@ -66,33 +67,39 @@ export default function EditProfile({ user, onSave, onCancel }) {
 
   // Image compression function
   const compressImage = (file, quality = 0.7, maxWidth = 800, maxHeight = 800) => {
-    return new Promise((resolve) => {
+    return new Promise((resolve, reject) => {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
       
       img.onload = () => {
-        // Calculate new dimensions
+        URL.revokeObjectURL(objectUrl);
+
         let { width, height } = img;
-        
-        if (width > maxWidth || height > maxHeight) {
-          const ratio = Math.min(maxWidth / width, maxHeight / height);
-          width *= ratio;
-          height *= ratio;
-        }
-        
+        const ratio = Math.min(1, maxWidth / width, maxHeight / height);
+        width = Math.max(1, Math.round(width * ratio));
+        height = Math.max(1, Math.round(height * ratio));
+
         canvas.width = width;
         canvas.height = height;
-        
-        // Draw and compress
         ctx.drawImage(img, 0, 0, width, height);
-        
+
         canvas.toBlob((blob) => {
+          if (!blob) {
+            reject(new Error("Image compression failed"));
+            return;
+          }
           resolve(blob);
         }, 'image/jpeg', quality);
       };
+
+      img.onerror = () => {
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error("Could not load image"));
+      };
       
-      img.src = URL.createObjectURL(file);
+      img.src = objectUrl;
     });
   };
 
@@ -102,13 +109,13 @@ export default function EditProfile({ user, onSave, onCancel }) {
     switch (name) {
       case 'username':
         if (!value.trim()) error = "Username is required";
-        else if (value.length < 3) error = "Username must be at least 3 characters";
-        else if (value.length > 20) error = "Username must be less than 20 characters";
-        else if (!/^[a-zA-Z0-9_]+$/.test(value)) error = "Username can only contain letters, numbers, and underscores";
+        else if (value.trim().length < 3) error = "Username must be at least 3 characters";
+        else if (value.trim().length > 20) error = "Username must be less than 20 characters";
+        else if (!/^[a-zA-Z0-9_]+$/.test(value.trim())) error = "Username can only contain letters, numbers, and underscores";
         break;
       case 'fullName':
         if (!value.trim()) error = "Full name is required";
-        else if (value.length < 2) error = "Full name must be at least 2 characters";
+        else if (value.trim().length < 2) error = "Full name must be at least 2 characters";
         break;
       case 'email':
         if (!value.trim()) error = "Email is required";
@@ -127,11 +134,11 @@ export default function EditProfile({ user, onSave, onCancel }) {
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
-    setProfileData({ ...profileData, [name]: value });
+    setProfileData(prev => ({ ...prev, [name]: value }));
     
     // Clear error for this field if user starts typing
     if (errors[name]) {
-      setErrors({ ...errors, [name]: "" });
+      setErrors(prev => ({ ...prev, [name]: "" }));
     }
   };
 
@@ -238,8 +245,8 @@ export default function EditProfile({ user, onSave, onCancel }) {
           return;
         }
         
-        setProfileData({ ...profileData, photoBase64: base64String });
-        setErrors({ ...errors, photo: "" });
+        setProfileData(prev => ({ ...prev, photoBase64: base64String }));
+        setErrors(prev => ({ ...prev, photo: "" }));
         setSuccessDialog("Image uploaded successfully!");
         setTimeout(() => {
           setIsUploading(false);
@@ -264,6 +271,7 @@ export default function EditProfile({ user, onSave, onCancel }) {
   const handleFileInput = (e) => {
     const file = e.target.files[0];
     handleFileChange(file);
+    e.target.value = "";
   };
 
   const handleDragOver = (e) => {
@@ -283,8 +291,9 @@ export default function EditProfile({ user, onSave, onCancel }) {
     handleFileChange(file);
   };
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
+    if (isSaving || isUploading) return;
     
     // Validate all fields
     const newErrors = {};
@@ -302,10 +311,21 @@ export default function EditProfile({ user, onSave, onCancel }) {
     }
 
     try {
-      onSave(profileData);
+      setIsSaving(true);
+      const sanitizedProfile = {
+        ...profileData,
+        username: profileData.username.trim(),
+        fullName: profileData.fullName.trim(),
+        fieldOfStudy: profileData.fieldOfStudy.trim(),
+        email: profileData.email.trim(),
+        bio: profileData.bio.trim(),
+        studyPreferences: profileData.studyPreferences.trim()
+      };
+      await onSave(sanitizedProfile);
       setSuccessDialog("Profile updated successfully!");
       setTimeout(() => {
         setSuccessDialog(null);
+        onCancel();
       }, 2000);
     } catch (error) {
       if (error.message && error.message.includes("longer than")) {
@@ -313,11 +333,13 @@ export default function EditProfile({ user, onSave, onCancel }) {
       } else {
         setErrorDialog("Failed to update profile. Please try again.");
       }
+    } finally {
+      setIsSaving(false);
     }
   };
 
   const removePhoto = () => {
-    setProfileData({ ...profileData, photoBase64: null });
+    setProfileData(prev => ({ ...prev, photoBase64: null }));
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -385,7 +407,7 @@ export default function EditProfile({ user, onSave, onCancel }) {
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    disabled={isUploading}
+                    disabled={isUploading || isSaving}
                     className="p-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 transition-colors shadow-lg disabled:opacity-50"
                     title="Upload photo"
                   >
@@ -395,6 +417,7 @@ export default function EditProfile({ user, onSave, onCancel }) {
                     <button
                       type="button"
                       onClick={removePhoto}
+                      disabled={isUploading || isSaving}
                       className="p-3 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors shadow-lg"
                       title="Remove photo"
                     >
@@ -454,6 +477,7 @@ export default function EditProfile({ user, onSave, onCancel }) {
               ref={fileInputRef}
               onChange={handleFileInput}
               accept="image/*"
+              disabled={isUploading || isSaving}
               className="hidden"
             />
 
@@ -615,16 +639,18 @@ export default function EditProfile({ user, onSave, onCancel }) {
               <button
                 type="button"
                 onClick={onCancel}
+                disabled={isSaving || isUploading}
                 className="flex-1 px-6 py-3 border border-gray-300 text-gray-700 rounded-xl hover:bg-gray-50 transition-colors font-semibold"
               >
                 Cancel
               </button>
               <button
                 type="submit"
-                className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all font-semibold flex items-center justify-center gap-2 shadow-lg"
+                disabled={isSaving || isUploading}
+                className="flex-1 px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl hover:from-blue-700 hover:to-purple-700 transition-all font-semibold flex items-center justify-center gap-2 shadow-lg disabled:opacity-60 disabled:cursor-not-allowed"
               >
                 <FaSave />
-                Save Changes
+                {isSaving ? "Saving..." : "Save Changes"}
               </button>
             </div>
           </form>

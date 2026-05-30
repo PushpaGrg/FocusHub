@@ -131,16 +131,15 @@ export default function App() {
   const handleProfileUpdate = async (updatedData) => {
     try {
       const docRef = doc(db, "users", user.uid);
-      await setDoc(docRef, updatedData, { merge: true });
 
       if (updatedData.email && updatedData.email !== user.email) {
         await updateEmail(user, updatedData.email);
       }
 
-      setProfile(updatedData);
-      setEditingProfile(false);
+      await setDoc(docRef, updatedData, { merge: true });
+      setProfile(prev => ({ ...prev, ...updatedData, uid: user.uid }));
     } catch (err) {
-      alert("Error updating profile: " + err.message);
+      throw err;
     }
   };
 

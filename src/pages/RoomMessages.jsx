@@ -1,12 +1,30 @@
-// src/pages/RoomMessages.jsx
-import { useState, useEffect, useRef } from "react";
-import { db, auth, storage } from "../firebase";
+/**
+ * RoomMessages Component
+ * 
+ * Main streaming and multi-viewer study room with host features
+ * Features:
+ * - Host broadcasts video to multiple viewers
+ * - Real-time chat, file uploads, resource sharing
+ * - Automatic media recording and cloud storage
+ * - Quiz/flashcard integration
+ * - Pomodoro timer with auto-recording
+ * - Distraction tracking during focus sessions
+ * 
+ * Architecture:
+ * - SimplePeer (ICE servers via webrtcConfig)
+ * - Firebase Firestore for signaling and state
+ * - Cloud recording to Cloudinary
+ * - Automatic reconnection on failures
+ */
+
+import { useState, useEffect, useRef } from 'react';
+import { db, auth, storage } from '../firebase';
 import { 
   collection, doc, deleteDoc, getDocs, addDoc, query, orderBy, onSnapshot,
   serverTimestamp, setDoc, where, updateDoc, increment, arrayUnion, getDoc
-} from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { containsSpam } from "../utils/spamDetection";
+} from 'firebase/firestore';
+import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { containsSpam } from '../utils/spamDetection';
 import { 
   FaArrowLeft, FaEye, FaVideo, FaVideoSlash, FaMicrophone, FaMicrophoneSlash,
   FaBroadcastTower, FaStopCircle, FaPowerOff, FaPaperPlane,
@@ -15,30 +33,62 @@ import {
   FaTimes, FaPlus, FaCloudUploadAlt, FaFilePdf, FaImage, FaDownload, 
   FaDesktop, FaTrash, FaCheckCircle, FaClock, FaInfoCircle, FaMedal, FaStar,
   FaTasks, FaBrain, FaPlay, FaCheckCircle as FaCheckIcon, FaTimesCircle, FaFlag, FaCrown, FaCircle
-} from "react-icons/fa";
+} from 'react-icons/fa';
+
 const Peer = window.SimplePeer;
-import { useAuthState } from "react-firebase-hooks/auth";
+import { useAuthState } from 'react-firebase-hooks/auth';
 
-const dingSound = new Audio("https://actions.google.com/sounds/v1/alarms/beep_short.ogg");
-const alertSound = new Audio("https://actions.google.com/sounds/v1/alarms/mechanical_clock_ring.ogg");
-alertSound.loop = true; 
-const successSound = new Audio("https://actions.google.com/sounds/v1/cartoon/magic_chime.ogg"); 
+// Audio notifications
+const DING_SOUND = 'https://actions.google.com/sounds/v1/alarms/beep_short.ogg';
+const ALERT_SOUND = 'https://actions.google.com/sounds/v1/alarms/mechanical_clock_ring.ogg';
+const SUCCESS_SOUND = 'https://actions.google.com/sounds/v1/cartoon/magic_chime.ogg';
 
+const dingSound = new Audio(DING_SOUND);
+const alertSound = new Audio(ALERT_SOUND);
+alertSound.loop = true;
+const successSound = new Audio(SUCCESS_SOUND);
+
+// Scoring configuration
+const SCORING_CONFIG = {
+  TIME_PER_MINUTE: 10, // points per minute focused
+  UPLOAD_BONUS: 50,
+  QUIZ_BONUS: 50,
+  DISTRACTION_PENALTY: 20,
+  MIN_FOCUS_TIME: 0.5, // minutes
+};
+
+// Cloud storage configuration
+const CLOUDINARY_CLOUD_NAME = 'dp4ounwlg';
+const CLOUDINARY_UPLOAD_PRESET = 'livestreams';
+
+// ============================================================================
+// SHARED COMPONENTS - RoomMessages UI
+// ============================================================================
+
+/**
+ * Toast Notification Component
+ * Auto-dismisses after 3 seconds
+ */
 const Toast = ({ message, type, onClose }) => {
   useEffect(() => {
     const timer = setTimeout(onClose, 3000);
     return () => clearTimeout(timer);
   }, [onClose]);
-  const bg = type === "error" ? "bg-red-500" : type === "success" ? "bg-green-500" : "bg-blue-500";
+
+  const bg = type === 'error' ? 'bg-red-500' : type === 'success' ? 'bg-green-500' : 'bg-blue-500';
+  
   return (
     <div className={`fixed top-24 left-1/2 transform -translate-x-1/2 z-[300] ${bg} text-white px-6 py-3 rounded-full shadow-xl flex items-center gap-3 animate-slideDown border border-white/10`}>
-      {type === "error" ? <FaExclamationTriangle /> : (type === "success" ? <FaCheckCircle /> : <FaInfoCircle />)}
+      {type === 'error' ? <FaExclamationTriangle /> : (type === 'success' ? <FaCheckCircle /> : <FaInfoCircle />)}
       <span className="text-sm font-semibold tracking-wide">{message}</span>
       <button onClick={onClose} className="ml-2 hover:text-white/80"><FaTimes /></button>
     </div>
   );
 };
 
+/**
+ * Confirmation Modal for destructive actions
+ */
 const ConfirmModal = ({ title, message, onConfirm, onCancel }) => (
   <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
     <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center border border-gray-200">
@@ -53,8 +103,18 @@ const ConfirmModal = ({ title, message, onConfirm, onCancel }) => (
   </div>
 );
 
+/**
+ * Session Report Modal
+ * Displays focus session stats, scoring breakdown, and badges earned
+ * 
+ * @param {Object} stats - Session statistics (minutes, score, badges, etc.)
+ * @param {Function} onClose - Callback when modal is dismissed
+ */
 const SessionReportModal = ({ stats, onClose }) => {
-  useEffect(() => { successSound.play().catch(() => {}); }, []);
+  useEffect(() => {
+    successSound.play().catch(() => {});
+  }, []);
+
   return (
     <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/80 backdrop-blur-md animate-fadeIn">
       <div className="bg-white p-8 rounded-[2rem] shadow-2xl w-full max-w-md text-center border-4 border-blue-500 relative overflow-hidden">
@@ -64,6 +124,8 @@ const SessionReportModal = ({ stats, onClose }) => {
           <h2 className="text-3xl font-black text-gray-800 mb-1">Session Complete!</h2>
           <p className="text-gray-500 font-medium text-sm">Here is how you performed</p>
         </div>
+
+        {/* Stats Grid */}
         <div className="grid grid-cols-2 gap-4 mb-6">
           <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100">
             <p className="text-xs text-gray-400 uppercase font-bold">Focus Time</p>
@@ -74,13 +136,17 @@ const SessionReportModal = ({ stats, onClose }) => {
             <p className="text-2xl font-bold text-blue-600">{stats.score} <span className="text-sm font-normal">pts</span></p>
           </div>
         </div>
+
+        {/* Scoring Breakdown */}
         <div className="bg-blue-50/50 p-3 rounded-xl border border-blue-100 text-[10px] text-gray-500 mb-6 text-left space-y-1">
-            <p className="font-bold text-blue-800 mb-1">Scoring Breakdown:</p>
-            <p className="flex justify-between"><span>• Time Focused:</span> <span>+{stats.minutes >= 0.5 ? Math.floor(stats.minutes * 10) : 0}</span></p>
-            <p className="flex justify-between"><span>• Uploads (+50/ea):</span> <span>+{stats.uploads * 50}</span></p>
-            <p className="flex justify-between text-green-600 font-bold"><span>• Quiz Points:</span> <span>+{stats.quizPoints}</span></p>
-            <p className="flex justify-between text-red-500"><span>• Distractions (-20/ea):</span> <span>-{stats.distractions * 20}</span></p>
+          <p className="font-bold text-blue-800 mb-1">Scoring Breakdown:</p>
+          <p className="flex justify-between"><span>• Time Focused:</span> <span>+{stats.minutes >= SCORING_CONFIG.MIN_FOCUS_TIME ? Math.floor(stats.minutes * SCORING_CONFIG.TIME_PER_MINUTE) : 0}</span></p>
+          <p className="flex justify-between"><span>• Uploads (+{SCORING_CONFIG.UPLOAD_BONUS}/ea):</span> <span>+{stats.uploads * SCORING_CONFIG.UPLOAD_BONUS}</span></p>
+          <p className="flex justify-between text-green-600 font-bold"><span>• Quiz Points:</span> <span>+{stats.quizPoints}</span></p>
+          <p className="flex justify-between text-red-500"><span>• Distractions (-{SCORING_CONFIG.DISTRACTION_PENALTY}/ea):</span> <span>-{stats.distractions * SCORING_CONFIG.DISTRACTION_PENALTY}</span></p>
         </div>
+
+        {/* Badges */}
         {stats.badges.length > 0 ? (
           <div className="mb-6">
             <p className="text-xs text-gray-400 uppercase font-bold mb-2">Badges Earned</p>
@@ -91,8 +157,9 @@ const SessionReportModal = ({ stats, onClose }) => {
             </div>
           </div>
         ) : (
-            <p className="text-xs text-gray-400 mb-6 italic">No badges this time. Keep practicing to earn more!</p>
+          <p className="text-xs text-gray-400 mb-6 italic">No badges this time. Keep practicing to earn more!</p>
         )}
+
         <button onClick={onClose} className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-3.5 rounded-xl font-bold text-lg hover:shadow-lg hover:scale-[1.02] transition-all">Continue</button>
       </div>
     </div>
@@ -352,6 +419,12 @@ export default function RoomMessages({ room, onBack }) {
     if (uploadsCount.current > 0) badges.push("Scholar");
     if (durationMinutes > 30) badges.push("Iron Will");
     if (earnedQuizPoints.current >= 100) badges.push("Quiz Whiz");
+    setSessionReport({ 
+      minutes: durationMinutes, score, badges, 
+      distractions: distractionCount, 
+      uploads: uploadsCount.current,
+      quizPoints: earnedQuizPoints.current 
+    });
     try {
       const userRef = doc(db, "users", user.uid);
       const userDoc = await getDoc(userRef);
@@ -365,12 +438,6 @@ export default function RoomMessages({ room, onBack }) {
         await setDoc(userRef, { totalFocusTime: durationMinutes, totalScore: score, badges: badges }, { merge: true });
       }
     } catch (e) { console.error("Score Error:", e); }
-    setSessionReport({ 
-      minutes: durationMinutes, score, badges, 
-      distractions: distractionCount, 
-      uploads: uploadsCount.current,
-      quizPoints: earnedQuizPoints.current 
-    });
   };
 
   const handleExit = async () => {
@@ -382,13 +449,11 @@ export default function RoomMessages({ room, onBack }) {
   };
 
   const handleEndRoom = () => {
-    if (isHost) {
-      triggerConfirm("End Room?", "This will delete the room for everyone.", async () => {
-        if (streamLive) await handleStopStream(false); 
-        await deleteDoc(doc(db, "studyRooms", room.id));
-        onBack();
-      });
-    }
+    if (!isHost || streamLive) return;
+    triggerConfirm("End Room?", "This will delete the room for everyone.", async () => {
+      await deleteDoc(doc(db, "studyRooms", room.id));
+      onBack();
+    });
   };
 
   useEffect(() => {
@@ -731,7 +796,7 @@ export default function RoomMessages({ room, onBack }) {
           if (!data?.viewerId || data.type !== "viewer") continue;
           if (peersRef.current[data.viewerId]) continue;
           try {
-            // ICE servers for NAT traversal - includes STUN and TURN for college/corporate networks
+            // Use centralized ICE servers (prefers env-configured TURN/STUN)
             const iceServers = [
               { urls: "stun:stun.l.google.com:19302" },
               { urls: "stun:stun1.l.google.com:19302" },
@@ -775,6 +840,7 @@ export default function RoomMessages({ room, onBack }) {
   // Zero out viewerCount + liveThumbnail when stream stops 
   const handleStopStream = async (showReport = true) => {
     setStreamLive(false); setCamOn(false); setMicOn(false);
+    const reportPromise = showReport ? generateSessionReport() : Promise.resolve();
     Object.values(peersRef.current).forEach(p => p.destroy());
     peersRef.current = {};
     if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(t => t.stop()); localStreamRef.current = null; }
@@ -795,7 +861,7 @@ export default function RoomMessages({ room, onBack }) {
       "timer.isRunning": false, "timer.isConfigured": false, 
       "timer.timeLeft": 1500, "timer.mode": 'work' 
     });
-    if (showReport) { await generateSessionReport(); }
+    await reportPromise;
   };
   // ───────────────────────────────────────────────────────────────────────────
 
@@ -824,7 +890,7 @@ export default function RoomMessages({ room, onBack }) {
           const data = docSnap.data();
           if (!data?.hostSignal || peersRef.current[viewerId]) return;
           if (!peersRef.current[viewerId]) {
-            // ICE servers for NAT traversal - includes STUN and TURN for college/corporate networks
+            // Use centralized ICE servers (prefers env-configured TURN/STUN)
             const iceServers = [
               { urls: "stun:stun.l.google.com:19302" },
               { urls: "stun:stun1.l.google.com:19302" },
@@ -1174,7 +1240,7 @@ export default function RoomMessages({ room, onBack }) {
           <ControlButton onClick={() => toggleSidePanel("tasks")} active={showTasks} icon={<FaTasks />} label="Goals" variant="default" />
           <ControlButton onClick={() => toggleSidePanel("files")} active={showFiles} icon={<FaPaperclip />} label="Resources" variant="default" />
           <ControlButton onClick={() => toggleSidePanel("chat")} active={showChat} icon={<FaPaperPlane />} label="Chat" variant="default" />
-          {isHost && <ControlButton onClick={handleEndRoom} icon={<FaPowerOff />} label="End Room" variant="danger" />}
+          {isHost && <ControlButton onClick={handleEndRoom} disabled={streamLive} icon={<FaPowerOff />} label="End Room" variant="danger" />}
         </div>
       </div>
 

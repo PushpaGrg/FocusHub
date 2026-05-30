@@ -75,7 +75,7 @@ export default function CreateStudyBuddyRoom({ onCancel, onSave }) {
             Study Buddy Room
           </h2>
           <p className="text-sm text-gray-500 font-medium">
-            Private space — share the invite link only with people you trust
+            Private space : share the invite link only with people you trust
           </p>
         </div>
 

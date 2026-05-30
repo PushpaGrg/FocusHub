@@ -1,41 +1,95 @@
-// src/pages/StudyBuddyRoom.jsx
-import { useState, useEffect, useRef, memo } from "react";
-import { db, auth } from "../firebase";
+/**
+ * StudyBuddyRoom Component
+ * 
+ * Real-time peer-to-peer study sessions with video/audio via PeerJS and WebRTC
+ * Features:
+ * - Instant P2P connections between study partners
+ * - Live messaging and resource sharing
+ * - Pomodoro timer for focus sessions
+ * - Quiz/flashcard integration
+ * - Media recording and playback
+ * 
+ * Architecture:
+ * - Uses Firebase Firestore for signaling and state sync
+ * - PeerJS for WebRTC peer connections
+ * - Automatic reconnection with exponential backoff
+ * - Optimized for restrictive networks (classrooms, corporate)
+ */
+
+import { useState, useEffect, useRef, memo } from 'react';
+import { db, auth } from '../firebase';
 import {
   collection, doc, deleteDoc, getDocs, addDoc, query, orderBy, onSnapshot,
   serverTimestamp, setDoc, where, updateDoc, increment, arrayUnion, getDoc, arrayRemove,
   deleteField,
-} from "firebase/firestore";
+} from 'firebase/firestore';
 import { 
   FaArrowLeft, FaEye, FaVideo, FaVideoSlash, FaMicrophone, FaMicrophoneSlash,
   FaStopCircle, FaPowerOff, FaPaperPlane, FaStopwatch, FaCoffee, FaCheck, 
   FaThumbsUp, FaHeart, FaBolt, FaExclamationTriangle, FaPaperclip, FaLink, 
   FaExternalLinkAlt, FaTimes, FaPlus, FaCloudUploadAlt, FaFilePdf, FaImage, 
   FaDownload, FaDesktop, FaTrash, FaCheckCircle, FaClock, FaInfoCircle, 
-  FaMedal, FaStar, FaTasks, FaBrain, FaPlay, FaCheckCircle as FaCheckIcon, 
+  FaTasks, FaBrain, FaPlay, FaCheckCircle as FaCheckIcon, 
   FaTimesCircle, FaFlag, FaCrown, FaCopy, FaSignOutAlt, FaCommentDots
-} from "react-icons/fa";
-import Peer from "peerjs";
-import { useAuthState } from "react-firebase-hooks/auth";
-import { containsSpam } from "../utils/spamDetection";
+} from 'react-icons/fa';
+import Peer from 'peerjs';
+import { useAuthState } from 'react-firebase-hooks/auth';
+import { containsSpam } from '../utils/spamDetection';
+import { getStudyBuddyPeerOptions } from '../utils/webrtcConfig';
 
-const alertSound = new Audio("https://actions.google.com/sounds/v1/alarms/mechanical_clock_ring.ogg");
+// Audio files for notifications
+const ALERT_SOUND_URL = 'https://actions.google.com/sounds/v1/alarms/mechanical_clock_ring.ogg';
+const alertSound = new Audio(ALERT_SOUND_URL);
 alertSound.loop = true;
-const successSound = new Audio("https://actions.google.com/sounds/v1/cartoon/magic_chime.ogg");
 
-// --- REUSABLE COMPONENTS ---
+// Timer configuration
+const DEFAULT_WORK_MINUTES = 25;
+const DEFAULT_BREAK_MINUTES = 5;
+
+// Chat/message constraints
+const MESSAGE_COOLDOWN_MS = 2000;
+const MAX_MESSAGE_LENGTH = 300;
+
+// ============================================================================
+// SHARED COMPONENTS - Used throughout StudyBuddyRoom
+// ============================================================================
+
+/**
+ * Toast Notification Component
+ * Auto-dismisses after 3 seconds
+ * 
+ * @param {Object} props
+ * @param {string} props.message - Notification text
+ * @param {string} props.type - "error" | "success" | "info"
+ * @param {Function} props.onClose - Callback when dismissed
+ */
 const Toast = ({ message, type, onClose }) => {
-  useEffect(() => { const timer = setTimeout(onClose, 3000); return () => clearTimeout(timer); }, [onClose]);
-  const bg = type === "error" ? "bg-red-500" : type === "success" ? "bg-green-500" : "bg-blue-500";
+  useEffect(() => {
+    const timer = setTimeout(onClose, 3000);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  const bg = type === 'error' ? 'bg-red-500' : type === 'success' ? 'bg-green-500' : 'bg-blue-500';
+  
   return (
     <div className={`fixed top-24 left-1/2 transform -translate-x-1/2 z-[300] ${bg} text-white px-6 py-3 rounded-full shadow-xl flex items-center gap-3 animate-slideDown border border-white/10`}>
-      {type === "error" ? <FaExclamationTriangle /> : (type === "success" ? <FaCheckCircle /> : <FaInfoCircle />)}
+      {type === 'error' ? <FaExclamationTriangle /> : (type === 'success' ? <FaCheckCircle /> : <FaInfoCircle />)}
       <span className="text-sm font-semibold tracking-wide">{message}</span>
       <button onClick={onClose} className="ml-2 hover:text-white/80"><FaTimes /></button>
     </div>
   );
 };
 
+/**
+ * Confirmation Modal Component
+ * Used for destructive actions requiring user confirmation
+ * 
+ * @param {Object} props
+ * @param {string} props.title - Modal heading
+ * @param {string} props.message - Confirmation text
+ * @param {Function} props.onConfirm - Called when user confirms
+ * @param {Function} props.onCancel - Called when user cancels
+ */
 const ConfirmModal = ({ title, message, onConfirm, onCancel }) => (
   <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
     <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center border border-gray-200">
@@ -50,55 +104,18 @@ const ConfirmModal = ({ title, message, onConfirm, onCancel }) => (
   </div>
 );
 
-const SessionReportModal = ({ stats, onClose }) => {
-  useEffect(() => { successSound.play().catch(() => {}); }, []);
-  return (
-    <div className="fixed inset-0 z-[400] flex items-center justify-center bg-black/80 backdrop-blur-md animate-fadeIn">
-      <div className="bg-white p-8 rounded-[2rem] shadow-2xl w-full max-w-md text-center border-4 border-blue-500 relative overflow-hidden">
-        <div className="absolute top-0 left-0 w-full h-2 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500"></div>
-        <div className="mb-6">
-          <div className="w-20 h-20 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4 text-4xl text-blue-600 shadow-inner"><FaMedal /></div>
-          <h2 className="text-3xl font-black text-gray-800 mb-1">Session Complete!</h2>
-          <p className="text-gray-500 font-medium text-sm">Here is how you performed in your group</p>
-        </div>
-        <div className="grid grid-cols-2 gap-4 mb-6">
-          <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100">
-            <p className="text-xs text-gray-400 uppercase font-bold">Focus Time</p>
-            <p className="text-2xl font-bold text-gray-800">{stats?.minutes || 0} <span className="text-sm font-normal">min</span></p>
-          </div>
-          <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100">
-            <p className="text-xs text-gray-400 uppercase font-bold">Total Score</p>
-            <p className="text-2xl font-bold text-blue-600">{stats?.score || 0} <span className="text-sm font-normal">pts</span></p>
-          </div>
-        </div>
-        <div className="bg-blue-50/50 p-3 rounded-xl border border-blue-100 text-[10px] text-gray-500 mb-6 text-left space-y-1">
-          <p className="font-bold text-blue-800 mb-1">Scoring Breakdown:</p>
-          <p className="flex justify-between"><span>• Time Focused (+10/min):</span> <span>+{(stats?.minutes || 0) * 10}</span></p>
-          <p className="flex justify-between"><span>• Uploads (+50/ea):</span> <span>+{(stats?.uploads || 0) * 50}</span></p>
-          <p className="flex justify-between text-green-600 font-bold"><span>• Quiz Points:</span> <span>+{stats?.quizPoints || 0}</span></p>
-          <p className="flex justify-between text-red-500"><span>• Distractions (-20/ea):</span> <span>-{(stats?.distractions || 0) * 20}</span></p>
-        </div>
-        {stats?.badges && stats.badges.length > 0 ? (
-          <div className="mb-6">
-            <p className="text-xs text-gray-400 uppercase font-bold mb-2">Badges Earned</p>
-            <div className="flex justify-center gap-2 flex-wrap">
-              {stats.badges.map((badge, index) => (
-                <span key={index} className="px-3 py-1 bg-yellow-100 text-yellow-700 text-xs font-bold rounded-full border border-yellow-200 flex items-center gap-1 shadow-sm"><FaStar /> {badge}</span>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <p className="text-xs text-gray-400 mb-6 italic">No badges this time. Stay focused &gt;10m for Zen Master!</p>
-        )}
-        <button onClick={onClose} className="w-full bg-gradient-to-r from-blue-600 to-purple-600 text-white py-3.5 rounded-xl font-bold text-lg hover:shadow-lg hover:scale-[1.02] transition-all">Continue</button>
-      </div>
-    </div>
-  );
-};
-
+/**
+ * Pomodoro Timer Setup Modal
+ * Allows users to configure work/break durations
+ */
 const TimerSetupModal = ({ onClose, onSave }) => {
-  const [w, setW] = useState("25");
-  const [b, setB] = useState("5");
+  const [workMinutes, setWorkMinutes] = useState(String(DEFAULT_WORK_MINUTES));
+  const [breakMinutes, setBreakMinutes] = useState(String(DEFAULT_BREAK_MINUTES));
+
+  const handleSave = () => {
+    onSave(Number(workMinutes) || DEFAULT_WORK_MINUTES, Number(breakMinutes) || DEFAULT_BREAK_MINUTES);
+  };
+
   return (
     <div className="fixed inset-0 flex items-center justify-center z-[200] bg-black/60 backdrop-blur-md animate-fadeIn">
       <div className="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-sm border border-white/20 relative">
@@ -111,13 +128,23 @@ const TimerSetupModal = ({ onClose, onSave }) => {
         <div className="space-y-4">
           <div>
             <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Focus (Minutes)</label>
-            <input type="number" value={w} onChange={e => setW(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono text-lg text-gray-900 transition" />
+            <input 
+              type="number" 
+              value={workMinutes} 
+              onChange={e => setWorkMinutes(e.target.value)} 
+              className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none font-mono text-lg text-gray-900 transition" 
+            />
           </div>
           <div>
             <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Break (Minutes)</label>
-            <input type="number" value={b} onChange={e => setB(e.target.value)} className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500 outline-none font-mono text-lg text-gray-900 transition" />
+            <input 
+              type="number" 
+              value={breakMinutes} 
+              onChange={e => setBreakMinutes(e.target.value)} 
+              className="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500 outline-none font-mono text-lg text-gray-900 transition" 
+            />
           </div>
-          <button onClick={() => onSave(Number(w) || 25, Number(b) || 5)} className="w-full text-white py-3.5 mt-2 rounded-xl font-bold hover:shadow-lg transition-transform active:scale-95 bg-gradient-to-r from-blue-600 to-purple-600">
+          <button onClick={handleSave} className="w-full text-white py-3.5 mt-2 rounded-xl font-bold hover:shadow-lg transition-transform active:scale-95 bg-gradient-to-r from-blue-600 to-purple-600">
             Start Timer Now
           </button>
         </div>
@@ -126,17 +153,34 @@ const TimerSetupModal = ({ onClose, onSave }) => {
   );
 };
 
-const ControlButton = ({ onClick, icon, label, variant = "default", disabled = false, active = false }) => {
+/**
+ * Control Button Component
+ * Reusable button with hover tooltips and variants
+ * 
+ * @param {Object} props
+ * @param {Function} props.onClick - Click handler
+ * @param {ReactNode} props.icon - Icon element
+ * @param {string} props.label - Tooltip label
+ * @param {string} props.variant - Button style variant
+ * @param {boolean} props.disabled - Disabled state
+ * @param {boolean} props.active - Active/toggle state
+ */
+const ControlButton = ({ onClick, icon, label, variant = 'default', disabled = false, active = false }) => {
   const variants = {
-    default: "bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10",
-    danger: "bg-red-500/80 hover:bg-red-600 text-white backdrop-blur-md shadow-red-500/20",
-    primary: "bg-blue-600/80 hover:bg-blue-500 text-white backdrop-blur-md shadow-blue-500/20",
-    success: "bg-green-500/80 hover:bg-green-500 text-white backdrop-blur-md shadow-green-500/20",
-    toggle: active ? "bg-white text-gray-900 hover:bg-gray-200" : "bg-red-500/80 text-white hover:bg-red-600"
+    default: 'bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10',
+    danger: 'bg-red-500/80 hover:bg-red-600 text-white backdrop-blur-md shadow-red-500/20',
+    primary: 'bg-blue-600/80 hover:bg-blue-500 text-white backdrop-blur-md shadow-blue-500/20',
+    success: 'bg-green-500/80 hover:bg-green-500 text-white backdrop-blur-md shadow-green-500/20',
+    toggle: active ? 'bg-white text-gray-900 hover:bg-gray-200' : 'bg-red-500/80 text-white hover:bg-red-600'
   };
+
   return (
     <div className="relative group">
-      <button onClick={onClick} disabled={disabled} className={`p-4 rounded-2xl shadow-lg transition-all duration-300 transform hover:scale-110 active:scale-95 flex items-center justify-center ${variants[variant] || variants.default} ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}>
+      <button 
+        onClick={onClick} 
+        disabled={disabled} 
+        className={`p-4 rounded-2xl shadow-lg transition-all duration-300 transform hover:scale-110 active:scale-95 flex items-center justify-center ${variants[variant] || variants.default} ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
+      >
         <div className="text-xl">{icon}</div>
       </button>
       {!disabled && (
@@ -167,6 +211,7 @@ const BreakOverlay = memo(({ isBreak, timeLeft }) => {
     </div>
   );
 });
+
 
 const RemoteVideo = memo(function RemoteVideo({ buddy, stream, isHost, mutedByHost, onHostMuteToggle }) {
   return (
@@ -401,70 +446,144 @@ function PresentingBottomZone({
   );
 }
 
-// --- MAIN COMPONENT ---
+/**
+ * Main StudyBuddy Room Component
+ * 
+ * Manages: peer connections, messaging, resources, quizzes, timer
+ * Auth: Only room creator (host) or invited participants can join
+ */
 export default function StudyBuddyRoom({ room, onBack }) {
   const [user] = useAuthState(auth);
 
+  // ─────────────────────────────────────────────────────────────────
+  // UI State - User interface interactions
+  // ─────────────────────────────────────────────────────────────────
   const [userProfile, setUserProfile] = useState(null);
-  const [lastMessageTime, setLastMessageTime] = useState(0);
-  const [timerData, setTimerData] = useState({ timeLeft: 1500, isRunning: false, mode: 'work', config: { work: 25, break: 5 }, isConfigured: false });
-  const [buddies, setBuddies] = useState([]);
-  const [copied, setCopied] = useState(false);
-  const [sessionStarted, setSessionStarted] = useState(false);
   const [toast, setToast] = useState(null);
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const [copied, setCopied] = useState(false);
+  const [isBottomHovered, setIsBottomHovered] = useState(false);
+
+  // ─────────────────────────────────────────────────────────────────
+  // Session State - Active session status
+  // ─────────────────────────────────────────────────────────────────
+  const [sessionStarted, setSessionStarted] = useState(false);
+  const [peerReady, setPeerReady] = useState(false);
+  const [peerError, setPeerError] = useState(null);
+
+  // ─────────────────────────────────────────────────────────────────
+  // Media State - Camera, microphone, remote streams
+  // ─────────────────────────────────────────────────────────────────
   const [camOn, setCamOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
   const [remoteStreams, setRemoteStreams] = useState({});
   const [hostMutedMicUids, setHostMutedMicUids] = useState({});
-  const [peerReady, setPeerReady] = useState(false);
-  const [showChat, setShowChat] = useState(false);
-  const [showFiles, setShowFiles] = useState(false);
-  const [showTasks, setShowTasks] = useState(false);
+
+  // ─────────────────────────────────────────────────────────────────
+  // Room State - Participant and resource data
+  // ─────────────────────────────────────────────────────────────────
+  const [buddies, setBuddies] = useState([]);
   const [messages, setMessages] = useState([]);
-  const [newMsg, setNewMsg] = useState("");
+  const [newMsg, setNewMsg] = useState('');
+  const [lastMessageTime, setLastMessageTime] = useState(0);
   const [resources, setResources] = useState([]);
-  const [activeResource, setActiveResource] = useState(null);
-  const [newResourceLink, setNewResourceLink] = useState("");
-  const [newResourceName, setNewResourceName] = useState("");
-  const [isAddingResource, setIsAddingResource] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [tasks, setTasks] = useState([]);
-  const [newTaskText, setNewTaskText] = useState("");
+  const [activeResource, setActiveResource] = useState(null);
+
+  // ─────────────────────────────────────────────────────────────────
+  // Timer State - Pomodoro functionality
+  // ─────────────────────────────────────────────────────────────────
+  const [timerData, setTimerData] = useState({
+    timeLeft: 1500, // 25 minutes in seconds
+    isRunning: false,
+    mode: 'work',
+    config: { work: DEFAULT_WORK_MINUTES, break: DEFAULT_BREAK_MINUTES },
+    isConfigured: false,
+  });
+  const [showTimerModal, setShowTimerModal] = useState(false);
+
+  // ─────────────────────────────────────────────────────────────────
+  // Quiz State - Live quiz/flashcard functionality
+  // ─────────────────────────────────────────────────────────────────
   const [showQuizPicker, setShowQuizPicker] = useState(false);
   const [hostDecks, setHostDecks] = useState([]);
   const [activeQuiz, setActiveQuiz] = useState(null);
   const [quizDeckData, setQuizDeckData] = useState(null);
   const [selectedOption, setSelectedOption] = useState(null);
-  const [showTimerModal, setShowTimerModal] = useState(false);
+
+  // ─────────────────────────────────────────────────────────────────
+  // Task Management State
+  // ─────────────────────────────────────────────────────────────────
+  const [tasks, setTasks] = useState([]);
+  const [newTaskText, setNewTaskText] = useState('');
+
+  // ─────────────────────────────────────────────────────────────────
+  // Panel Visibility State - Sidebar panels
+  // ─────────────────────────────────────────────────────────────────
+  const [showChat, setShowChat] = useState(false);
+  const [showFiles, setShowFiles] = useState(false);
+  const [showTasks, setShowTasks] = useState(false);
+
+  // ─────────────────────────────────────────────────────────────────
+  // AI Assistant State
+  // ─────────────────────────────────────────────────────────────────
+  const [aiMessages, setAiMessages] = useState([
+    { role: 'assistant', content: 'Hi! Ask me anything about study planning, focus tips, or this room.' }
+  ]);
+  const [aiInput, setAiInput] = useState('');
+  const [isAiLoading, setIsAiLoading] = useState(false);
+
+  // ─────────────────────────────────────────────────────────────────
+  // Distraction Tracking State
+  // ─────────────────────────────────────────────────────────────────
   const [distractionCount, setDistractionCount] = useState(0);
   const [showDistractionAlert, setShowDistractionAlert] = useState(false);
-  const [sessionReport, setSessionReport] = useState(null);
-  const [isExiting, setIsExiting] = useState(false);
-  const [confirmDialog, setConfirmDialog] = useState(null);
-  // when user hovers the bottom zone during presenting, content area shrinks to make room
-  const [isBottomHovered, setIsBottomHovered] = useState(false);
 
+  // ─────────────────────────────────────────────────────────────────
+  // Refs - Non-component storage (WebRTC, timers, etc.)
+  // ─────────────────────────────────────────────────────────────────
   const myVideoRef = useRef(null);
-  const peersRef = useRef({});
-  const peerRef = useRef(null);
-  const localStreamRef = useRef(null);
+  const peerRef = useRef(null); // Main PeerJS instance
+  const peersRef = useRef({}); // Map of peer calls
+  const localStreamRef = useRef(null); // Local media stream
   const chatEndRef = useRef(null);
   const fileInputRef = useRef(null);
+
+  // Session tracking
   const earnedQuizPoints = useRef(0);
   const lastScoredIndex = useRef(-1);
   const sessionStartTime = useRef(Date.now());
   const uploadsCount = useRef(0);
 
-  if (!user || !room) return <div className="h-screen flex items-center justify-center text-white bg-gray-900">Loading...</div>;
+  // ─────────────────────────────────────────────────────────────────
+  // Derived Values
+  // ─────────────────────────────────────────────────────────────────
+  if (!user || !room) {
+    return <div className="h-screen flex items-center justify-center text-white bg-gray-900">Loading...</div>;
+  }
 
   const isHost = room?.createdBy === user?.uid;
-  const roomRef = doc(db, "studyRooms", room.id);
+  const roomRef = doc(db, 'studyRooms', room.id);
   const inviteLink = `${window.location.origin}/join/${room.id}`;
-  const safeUsername = userProfile?.username || user?.displayName || (user?.email ? user.email.split("@")[0] : "Student");
+  const safeUsername = userProfile?.username || user?.displayName || (user?.email ? user.email.split('@')[0] : 'Student');
 
-  const triggerToast = (msg, type = "info") => setToast({ message: msg, type });
+  // ─────────────────────────────────────────────────────────────────
+  // Helper Functions - Toast and dialog triggers
+  // ─────────────────────────────────────────────────────────────────
+  const triggerToast = (msg, type = 'info') => {
+    setToast({ message: msg, type });
+  };
+
   const triggerConfirm = (title, message, action) => {
-    setConfirmDialog({ title, message, onConfirm: () => { action(); setConfirmDialog(null); }, onCancel: () => setConfirmDialog(null) });
+    setConfirmDialog({
+      title,
+      message,
+      onConfirm: () => {
+        action();
+        setConfirmDialog(null);
+      },
+      onCancel: () => setConfirmDialog(null),
+    });
   };
 
   useEffect(() => {
@@ -491,7 +610,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
         else { setActiveQuiz(null); setQuizDeckData(null); setSelectedOption(null); }
       } else {
         triggerToast("Room ended by host", "info");
-        setTimeout(onBack, 2000);
+        onBack();
       }
     }, (error) => console.error("Room Sync Error:", error));
 
@@ -624,6 +743,11 @@ export default function StudyBuddyRoom({ room, onBack }) {
   useEffect(() => {
     if (!sessionStarted) return;
 
+    let reconnectTimeout = null;
+    let reconnectAttempts = 0;
+    const maxReconnectAttempts = 10;
+    const baseReconnectDelay = 1000;
+
     const initMedia = async () => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
@@ -636,32 +760,67 @@ export default function StudyBuddyRoom({ room, onBack }) {
 
         sessionStartTime.current = Date.now();
 
-        // ICE servers for NAT traversal - includes STUN and TURN for college/corporate networks
-        const iceServers = [
-          { urls: "stun:stun.l.google.com:19302" },
-          { urls: "stun:stun1.l.google.com:19302" },
-          // Free TURN servers for better connectivity on restrictive networks
-          { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
-          { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
-          { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
-        ];
-        const peer = new Peer({ config: { iceServers } });
+        const peer = new Peer(getStudyBuddyPeerOptions());
         peerRef.current = peer;
+        reconnectAttempts = 0;
 
         peer.on("open", async (id) => {
           setPeerReady(true);
+          setPeerError(null);
+          reconnectAttempts = 0;
+          console.log("[StudyBuddy] PeerJS connected with ID:", id);
           await setDoc(doc(db, "studyRooms", room.id, "peers", user.uid), { peerId: id, userId: user.uid, timestamp: Date.now() });
         });
 
+        peer.on("error", (err) => {
+          console.error("[StudyBuddy] Peer error:", err.type, err.message);
+          setPeerError(`Connection issue (${err.type}). Retrying...`);
+          triggerToast("Peer connection issue. Retrying with TURN relay...", "error");
+          
+          if (peer && peer.disconnected && reconnectAttempts < maxReconnectAttempts) {
+            const delay = baseReconnectDelay * Math.pow(1.5, reconnectAttempts);
+            reconnectAttempts++;
+            reconnectTimeout = setTimeout(() => {
+              try { peer.reconnect(); } catch (e) { console.error("[StudyBuddy] Reconnect error:", e); }
+            }, delay);
+          }
+        });
+
+        peer.on("disconnected", () => {
+          console.warn("[StudyBuddy] Peer disconnected from signaling server");
+          setPeerReady(false);
+          setPeerError("Disconnected from peer network. Reconnecting...");
+          triggerToast("Connection lost. Attempting to reconnect...", "error");
+          
+          if (peer && peer.reconnect && reconnectAttempts < maxReconnectAttempts) {
+            const delay = baseReconnectDelay * Math.pow(1.5, reconnectAttempts);
+            reconnectAttempts++;
+            reconnectTimeout = setTimeout(() => {
+              try { peer.reconnect(); } catch (e) { console.error("[StudyBuddy] Reconnect error:", e); }
+            }, delay);
+          }
+        });
+
+        peer.on("close", () => {
+          console.log("[StudyBuddy] Peer connection closed");
+          setPeerReady(false);
+        });
+
         peer.on("call", (call) => {
-          // Only answer if we don't already have a stream from this user
           const callerId = call.metadata?.userId || call.peer;
           if (!remoteStreams[callerId]) {
+            console.log("[StudyBuddy] Incoming call from:", callerId);
             call.answer(localStreamRef.current);
             call.on("stream", (remoteStream) => {
+              console.log("[StudyBuddy] Remote stream received from:", callerId);
               setRemoteStreams(prev => ({ ...prev, [callerId]: remoteStream }));
             });
+            call.on("error", (error) => {
+              console.error("[StudyBuddy] Incoming call error:", error);
+              triggerToast("Peer stream failed. Reconnecting...", "error");
+            });
             call.on("close", () => {
+              console.log("[StudyBuddy] Remote stream closed from:", callerId);
               setRemoteStreams(prev => {
                 const newStreams = { ...prev };
                 delete newStreams[callerId];
@@ -669,13 +828,12 @@ export default function StudyBuddyRoom({ room, onBack }) {
               });
             });
           } else {
-            // Reject call if we already have this user's stream
             call.close();
           }
         });
 
       } catch (err) {
-        console.error("Webcam Error:", err);
+        console.error("[StudyBuddy] Webcam Error:", err);
         if (err.name === "NotReadableError") triggerToast("Camera is in use by another app. Please refresh.", "error");
         else triggerToast("Camera/Mic access denied.", "error");
       }
@@ -684,6 +842,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
     initMedia();
 
     return () => {
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
       window.__localStream = null;
       if (localStreamRef.current) localStreamRef.current.getTracks().forEach(t => t.stop());
       if (peerRef.current) { peerRef.current.destroy(); peerRef.current = null; }
@@ -703,6 +862,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
   useEffect(() => {
     if (!sessionStarted || !peerReady) return;
     const activeCalls = new Set();
+    let reconnectTimers = {};
 
     const unsubscribe = onSnapshot(collection(db, "studyRooms", room.id, "peers"), (snapshot) => {
       snapshot.docChanges().forEach(async (change) => {
@@ -714,18 +874,46 @@ export default function StudyBuddyRoom({ room, onBack }) {
               activeCalls.add(data.userId);
               setTimeout(() => {
                 if (peerRef.current && localStreamRef.current) {
-                  const call = peerRef.current.call(data.peerId, localStreamRef.current, { metadata: { userId: user.uid } });
-                  call.on("stream", (remoteStream) => { setRemoteStreams(prev => ({ ...prev, [data.userId]: remoteStream })); });
-                  peersRef.current[data.userId] = call;
+                  if (peerRef.current.disconnected && peerRef.current.reconnect) {
+                    try { peerRef.current.reconnect(); } catch (reconnectError) { console.error("[StudyBuddy] Peer reconnect failed:", reconnectError); }
+                  }
+                  try {
+                    console.log("[StudyBuddy] Initiating call to:", data.userId);
+                    const call = peerRef.current.call(data.peerId, localStreamRef.current, { metadata: { userId: user.uid } });
+                    call.on("stream", (remoteStream) => { 
+                      console.log("[StudyBuddy] Remote stream established with:", data.userId);
+                      setRemoteStreams(prev => ({ ...prev, [data.userId]: remoteStream })); 
+                    });
+                    call.on("error", (error) => {
+                      console.error("[StudyBuddy] Outgoing call error:", error);
+                      triggerToast("Peer stream failed. Retrying...", "error");
+                      activeCalls.delete(data.userId);
+                    });
+                    call.on("close", () => {
+                      console.log("[StudyBuddy] Call closed with:", data.userId);
+                      setRemoteStreams(prev => {
+                        const newStreams = { ...prev };
+                        delete newStreams[data.userId];
+                        return newStreams;
+                      });
+                    });
+                    peersRef.current[data.userId] = call;
+                  } catch (err) {
+                    console.error("[StudyBuddy] Failed to establish call:", err);
+                    activeCalls.delete(data.userId);
+                  }
                 }
               }, 1500);
             }
           }
         }
       });
-    }, (error) => console.error("Peer Sync Error:", error));
+    }, (error) => console.error("[StudyBuddy] Peer Sync Error:", error));
 
-    return unsubscribe;
+    return () => {
+      unsubscribe();
+      Object.values(reconnectTimers).forEach(timer => clearTimeout(timer));
+    };
   }, [sessionStarted, peerReady, room.id, user.uid]);
 
   // --- HANDLERS ---
@@ -783,32 +971,20 @@ export default function StudyBuddyRoom({ room, onBack }) {
   const generateSessionReport = async () => {
     const endTime = Date.now();
     const durationMinutes = Math.max(1, Math.floor((endTime - sessionStartTime.current) / 1000 / 60));
-    let score = (durationMinutes * 10) + (uploadsCount.current * 50) + earnedQuizPoints.current - (distractionCount * 20);
-    if (score < 0) score = 0;
-
-    const badges = [];
-    if (distractionCount === 0 && durationMinutes > 10) badges.push("Zen Master");
-    if (uploadsCount.current > 0) badges.push("Scholar");
-    if (durationMinutes > 30) badges.push("Iron Will");
-    if (earnedQuizPoints.current >= 100) badges.push("Quiz Whiz");
-
     try {
       const userRef = doc(db, "users", user.uid);
       const userDoc = await getDoc(userRef);
       if (userDoc.exists()) {
-        await updateDoc(userRef, {
-          totalFocusTime: increment(durationMinutes),
-          totalScore: increment(score),
-          badges: badges.length > 0 ? arrayUnion(...badges) : userDoc.data().badges || []
-        });
+        await updateDoc(userRef, { totalFocusTime: increment(durationMinutes) });
+        const refreshedUser = await getDoc(userRef);
+        if (refreshedUser.exists()) setUserProfile(refreshedUser.data());
       }
-    } catch (e) {}
-
-    setSessionReport({ minutes: durationMinutes, score, badges, distractions: distractionCount, uploads: uploadsCount.current, quizPoints: earnedQuizPoints.current });
+    } catch (e) {
+      console.error("Session report update failed:", e);
+    }
   };
 
   const handleLeaveRoom = async () => {
-    setIsExiting(true);
     try {
       const userData = { uid: user.uid, username: safeUsername, email: user.email };
       const snap = await getDoc(roomRef);
@@ -819,8 +995,8 @@ export default function StudyBuddyRoom({ room, onBack }) {
       await deleteDoc(doc(db, "studyRooms", room.id, "peers", user.uid)).catch(() => {});
     } catch (err) {}
 
-    if (sessionStarted) { await generateSessionReport(); }
-    else { onBack(); }
+    if (sessionStarted) await generateSessionReport();
+    onBack();
   };
 
   const handleSaveTimerConfig = async (workMin, breakMin) => {
@@ -890,34 +1066,70 @@ export default function StudyBuddyRoom({ room, onBack }) {
   const handleStopPresentation = async () => { if (isHost) await updateDoc(roomRef, { activeResource: null }); };
   const handleApproveResource = async (resourceId) => { if (!isHost) return; try { await updateDoc(doc(db, "room_resources", resourceId), { approved: true }); } catch (err) {} };
   const handleDeleteResource = async (resourceId) => { try { await deleteDoc(doc(db, "room_resources", resourceId)); if (activeResource && activeResource.id === resourceId) handleStopPresentation(); } catch (err) {} };
-
-  const handleAddResource = async (e) => {
-    e.preventDefault();
-    if (!newResourceLink.trim() || !newResourceName.trim()) return;
-    try {
-      await addDoc(collection(db, "room_resources"), { roomId: room.id, name: newResourceName.trim(), url: newResourceLink.trim(), type: "link", addedBy: safeUsername, createdAt: serverTimestamp(), approved: isHost });
-      uploadsCount.current += 1;
-      setNewResourceLink(""); setNewResourceName(""); setIsAddingResource(false);
-      triggerToast(isHost ? "Link added!" : "Sent for approval", "success");
-    } catch (err) {}
-  };
-
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    if (file.size > 500 * 1024) return triggerToast("File too large (>500KB)", "error");
+    if (file.size > 500 * 1024) { triggerToast("File too large (>500KB)", "error"); return; }
     setIsUploading(true);
     const reader = new FileReader();
     reader.onload = async () => {
       try {
-        await addDoc(collection(db, "room_resources"), { roomId: room.id, name: file.name, data: reader.result, type: file.type, size: file.size, addedBy: safeUsername, createdAt: serverTimestamp(), approved: isHost });
+        const isApproved = isHost ? true : false;
+        await addDoc(collection(db, "room_resources"), {
+          roomId: room.id, name: file.name, data: reader.result, type: file.type, size: file.size, 
+          addedBy: user.email.split("@")[0], createdAt: serverTimestamp(), approved: isApproved
+        });
         uploadsCount.current += 1;
-        triggerToast(isHost ? "Uploaded!" : "Sent for approval", "success");
-      } catch (err) {} finally { setIsUploading(false); }
+        if (isHost) { triggerToast("Uploaded!", "success"); }
+        else triggerToast("Sent for approval", "info");
+      } catch (err) { triggerToast("Upload failed", "error"); } finally { setIsUploading(false); }
     };
     reader.readAsDataURL(file);
+    e.target.value = "";
   };
   const triggerFileInput = () => { if (fileInputRef.current) fileInputRef.current.click(); };
+
+  const handleAiSubmit = async (e) => {
+    e.preventDefault();
+    const prompt = aiInput.trim();
+    if (!prompt) return;
+
+    setAiMessages(prev => [...prev, { role: "user", content: prompt }]);
+    setAiInput("");
+    setIsAiLoading(true);
+
+    const API_KEY = import.meta.env.VITE_GROQ_API_KEY;
+    if (!API_KEY) {
+      setAiMessages(prev => [...prev, { role: "assistant", content: "AI key missing. Add VITE_GROQ_API_KEY to your .env." }]);
+      setIsAiLoading(false);
+      return;
+    }
+
+    try {
+      const response = await fetch("https://api.groq.dev/v1/complete", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${API_KEY}`
+        },
+        body: JSON.stringify({
+          model: "llama-3.3-70b-versatile",
+          input: prompt,
+          prompt,
+          max_output_tokens: 400
+        })
+      });
+
+      const data = await response.json();
+      const aiResponse = data?.results?.[0]?.content?.[0]?.text || data?.outputs?.[0]?.content?.[0]?.text || data?.message || data?.text || "Sorry, I couldn't parse the response.";
+      setAiMessages(prev => [...prev, { role: "assistant", content: aiResponse }]);
+    } catch (err) {
+      console.error(err);
+      setAiMessages(prev => [...prev, { role: "assistant", content: "Sorry, I couldn't get a response. Try again in a moment." }]);
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
 
   // quiz
   useEffect(() => {
@@ -951,7 +1163,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
       if (lastScoredIndex.current !== activeQuiz.currentIndex) {
         if (selectedOption === currentCard.back) {
           earnedQuizPoints.current += 50;
-          triggerToast("Correct! +50 Points", "success");
+          triggerToast("Correct!", "success");
         } else { triggerToast("Incorrect answer.", "error"); }
         lastScoredIndex.current = activeQuiz.currentIndex;
       }
@@ -1054,7 +1266,6 @@ export default function StudyBuddyRoom({ room, onBack }) {
 
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
       {confirmDialog && <ConfirmModal title={confirmDialog.title} message={confirmDialog.message} onConfirm={confirmDialog.onConfirm} onCancel={confirmDialog.onCancel} />}
-      {sessionReport && <SessionReportModal stats={sessionReport} onClose={() => { setSessionReport(null); if (isExiting) onBack(); }} />}
       {isHost && showTimerModal && <TimerSetupModal onClose={() => setShowTimerModal(false)} onSave={handleSaveTimerConfig} />}
 
       {/* quiz picker modal */}
@@ -1112,6 +1323,12 @@ export default function StudyBuddyRoom({ room, onBack }) {
             </button>
           </div>
         </div>
+
+        {peerError && (
+          <div className="absolute top-24 right-4 z-[70] pointer-events-auto bg-red-500/90 text-white px-4 py-3 rounded-3xl shadow-2xl border border-red-400">
+            {peerError}
+          </div>
+        )}
 
         {/* distraction warning */}
         {showDistractionAlert && (
@@ -1312,7 +1529,11 @@ export default function StudyBuddyRoom({ room, onBack }) {
                     <span className="text-sm font-bold truncate block mb-2">{res.name}</span>
                     <div className="flex gap-2">
                       <button onClick={() => handleApproveResource(res.id)} className="bg-green-100 text-green-600 px-3 py-1 rounded text-xs font-bold">Approve</button>
-                      <button onClick={() => handleDeleteResource(res.id)} className="bg-red-100 text-red-500 px-3 py-1 rounded text-xs font-bold">Reject</button>
+                      <button onClick={() => triggerConfirm(
+                        "Delete Resource",
+                        "Are you sure you want to remove this pending resource?",
+                        () => handleDeleteResource(res.id)
+                      )} className="bg-red-100 text-red-500 px-3 py-1 rounded text-xs font-bold">Reject</button>
                     </div>
                   </div>
                 ))}
@@ -1325,6 +1546,13 @@ export default function StudyBuddyRoom({ room, onBack }) {
                     </div>
                     <div className="flex gap-2">
                       {isHost && <button onClick={() => handlePresentResource(res)} className="text-gray-400 hover:text-blue-600 transition"><FaEye /></button>}
+                      {isHost && (
+                        <button onClick={() => triggerConfirm(
+                          "Delete Resource",
+                          "Are you sure you want to delete this resource permanently?",
+                          () => handleDeleteResource(res.id)
+                        )} className="text-gray-400 hover:text-red-500 transition"><FaTrash /></button>
+                      )}
                       {res.type === 'link'
                         ? <a href={res.url} target="_blank" rel="noreferrer" className="text-gray-400 hover:text-blue-600 transition"><FaExternalLinkAlt /></a>
                         : <a href={res.data} download={res.name} className="text-gray-400 hover:text-blue-600 transition"><FaDownload /></a>}
@@ -1332,24 +1560,54 @@ export default function StudyBuddyRoom({ room, onBack }) {
                   </div>
                 ))}
               </div>
-              <div className="p-4 border-t border-gray-100 bg-white grid grid-cols-2 gap-3">
-                <button onClick={() => setIsAddingResource(true)} className="bg-gray-50 text-gray-700 py-3 rounded-xl font-bold text-xs border border-gray-200 flex justify-center items-center gap-2 hover:bg-gray-100 transition"><FaPlus /> Add Link</button>
-                <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
-                <button onClick={triggerFileInput} disabled={isUploading} className="bg-gray-900 text-white py-3 rounded-xl font-bold text-xs flex justify-center items-center gap-2 hover:bg-gray-800 transition">
-                  {isUploading ? "Uploading..." : <><FaCloudUploadAlt /> Upload File</>}
+              <div className="p-4 border-t border-gray-100 bg-white">
+                <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} accept="image/*,application/pdf" />
+                <button onClick={triggerFileInput} disabled={isUploading} className="w-full bg-gradient-to-r from-gray-900 to-gray-800 text-white py-3 rounded-xl font-bold hover:shadow-lg transition flex items-center justify-center gap-2 text-xs disabled:opacity-70 mb-4">
+                  {isUploading ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                      Uploading...
+                    </>
+                  ) : (
+                    <>
+                      <FaCloudUploadAlt /> Upload File (Images, PDF)
+                    </>
+                  )}
                 </button>
-              </div>
-              {isAddingResource && (
-                <div className="absolute inset-0 bg-white/90 backdrop-blur p-6 z-50 flex flex-col justify-center animate-fadeIn">
-                  <h3 className="font-bold text-lg mb-4 text-center">Add External Link</h3>
-                  <input value={newResourceName} onChange={e => setNewResourceName(e.target.value)} placeholder="Title (e.g., React Docs)" className="w-full mb-3 p-3 bg-gray-50 border border-gray-200 rounded-xl focus:border-blue-500 outline-none transition" />
-                  <input value={newResourceLink} onChange={e => setNewResourceLink(e.target.value)} placeholder="Paste URL here..." className="w-full mb-6 p-3 bg-gray-50 border border-gray-200 rounded-xl focus:border-blue-500 outline-none transition" />
-                  <div className="flex gap-2">
-                    <button onClick={() => setIsAddingResource(false)} className="flex-1 py-3 bg-gray-100 text-gray-600 font-bold rounded-xl hover:bg-gray-200 transition">Cancel</button>
-                    <button onClick={handleAddResource} className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl shadow-md hover:bg-blue-700 transition">Add Link</button>
+                <div className="bg-white p-4 rounded-3xl border border-gray-200 shadow-sm">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <p className="text-sm font-bold">Study Buddy AI</p>
+                      <p className="text-xs text-gray-500">Ask the assistant about study tips, summaries, or session help.</p>
+                    </div>
+                    <span className="text-xs font-semibold text-blue-600">Assistant</span>
                   </div>
+                  <div className="max-h-56 overflow-y-auto space-y-3 pb-2 border-b border-gray-100 mb-3">
+                    {aiMessages.map((msg, index) => (
+                      <div key={index} className={`rounded-2xl p-3 ${msg.role === 'user' ? 'bg-blue-600 text-white self-end' : 'bg-gray-100 text-gray-800'}`}>
+                        <div className="text-[10px] uppercase tracking-[0.18em] mb-1 opacity-70">{msg.role === 'user' ? 'You' : 'Assistant'}</div>
+                        <div className="whitespace-pre-wrap text-sm leading-relaxed">{msg.content}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <form onSubmit={handleAiSubmit} className="flex gap-2">
+                    <input
+                      value={aiInput}
+                      onChange={(e) => setAiInput(e.target.value)}
+                      placeholder="Ask the study buddy assistant..."
+                      disabled={isAiLoading}
+                      className="flex-1 px-4 py-3 border border-gray-200 rounded-2xl outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100 text-sm"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isAiLoading}
+                      className="bg-blue-600 text-white px-4 py-3 rounded-2xl font-semibold shadow-sm hover:bg-blue-700 transition disabled:opacity-50"
+                    >
+                      {isAiLoading ? "Thinking..." : "Ask"}
+                    </button>
+                  </form>
                 </div>
-              )}
+              </div>
             </>
           )}
 
