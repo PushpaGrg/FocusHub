@@ -1,21 +1,8 @@
-/**
- * RoomMessages Component
- * 
- * Main streaming and multi-viewer study room with host features
- * Features:
- * - Host broadcasts video to multiple viewers
- * - Real-time chat, file uploads, resource sharing
- * - Automatic media recording and cloud storage
- * - Quiz/flashcard integration
- * - Pomodoro timer with auto-recording
- * - Distraction tracking during focus sessions
- * 
- * Architecture:
- * - SimplePeer (ICE servers via webrtcConfig)
- * - Firebase Firestore for signaling and state
- * - Cloud recording to Cloudinary
- * - Automatic reconnection on failures
- */
+// RoomMessages Component
+// 
+// Host streaming room - one person broadcasts to many viewers
+// has chat, file uploads, quizzes, timer, distraction alerts, recording
+// uses SimplePeer for WebRTC + Firestore for signaling
 
 import { useState, useEffect, useRef } from 'react';
 import { db, auth, storage } from '../firebase';
@@ -38,7 +25,7 @@ import {
 const Peer = window.SimplePeer;
 import { useAuthState } from 'react-firebase-hooks/auth';
 
-// Audio notifications
+// notification sounds
 const DING_SOUND = 'https://actions.google.com/sounds/v1/alarms/beep_short.ogg';
 const ALERT_SOUND = 'https://actions.google.com/sounds/v1/alarms/mechanical_clock_ring.ogg';
 const SUCCESS_SOUND = 'https://actions.google.com/sounds/v1/cartoon/magic_chime.ogg';
@@ -61,14 +48,12 @@ const SCORING_CONFIG = {
 const CLOUDINARY_CLOUD_NAME = 'dp4ounwlg';
 const CLOUDINARY_UPLOAD_PRESET = 'livestreams';
 
-// ============================================================================
-// SHARED COMPONENTS - RoomMessages UI
-// ============================================================================
 
-/**
- * Toast Notification Component
- * Auto-dismisses after 3 seconds
- */
+// ────────────────────────────────────────────────
+// Shared UI Components
+// ────────────────────────────────────────────────
+
+// notification toast - pops up and auto-closes after 3 sec
 const Toast = ({ message, type, onClose }) => {
   useEffect(() => {
     const timer = setTimeout(onClose, 3000);
@@ -86,9 +71,7 @@ const Toast = ({ message, type, onClose }) => {
   );
 };
 
-/**
- * Confirmation Modal for destructive actions
- */
+// confirmation dialog for deleting stuff or leaving
 const ConfirmModal = ({ title, message, onConfirm, onCancel }) => (
   <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
     <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center border border-gray-200">
@@ -103,13 +86,7 @@ const ConfirmModal = ({ title, message, onConfirm, onCancel }) => (
   </div>
 );
 
-/**
- * Session Report Modal
- * Displays focus session stats, scoring breakdown, and badges earned
- * 
- * @param {Object} stats - Session statistics (minutes, score, badges, etc.)
- * @param {Function} onClose - Callback when modal is dismissed
- */
+// shows the session summary - how long you studied, score, badges
 const SessionReportModal = ({ stats, onClose }) => {
   useEffect(() => {
     successSound.play().catch(() => {});
@@ -188,6 +165,7 @@ const TimerSetupModal = ({ onClose, onSave, isStreamLive }) => {
   );
 };
 
+// button for controlling stream controls (mic, camera, etc)
 const ControlButton = ({ onClick, icon, label, variant = "default", disabled = false, active = false }) => {
   const variants = {
     default: "bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10",
@@ -206,6 +184,9 @@ const ControlButton = ({ onClick, icon, label, variant = "default", disabled = f
   );
 };
 
+// ────────────────────────────────────────────────
+// Main RoomMessages Component - Host Streaming
+// ────────────────────────────────────────────────
 export default function RoomMessages({ room, onBack }) {
   const [user] = useAuthState(auth);
   const [lastMessageTime, setLastMessageTime] = useState(0);
@@ -214,8 +195,12 @@ export default function RoomMessages({ room, onBack }) {
   if (!user || !room) return <div className="h-screen flex items-center justify-center text-white bg-gray-900">Loading...</div>;
 
   const isDummy = room?.isDummy;
-  const isHost = !isDummy && (room?.createdBy === user?.uid || room?.isHost);
 
+  const isHost = !isDummy && (room?.createdBy === user?.uid || room?.isHost);
+  
+  const isQuizRoom = room?.title?.toLowerCase() === "quiz" || room?.name?.toLowerCase() === "quiz";
+
+  // messaging
   const [messages, setMessages] = useState([]);
   const [newMsg, setNewMsg] = useState("");
   const [viewers, setViewers] = useState(0);
@@ -620,6 +605,13 @@ export default function RoomMessages({ room, onBack }) {
 
   const handleAiSubmit = async (e) => {
     e.preventDefault();
+    
+    // ADD THIS CHECK:
+    if (isQuizRoom) {
+      triggerToast("AI Assistant is disabled in Quiz rooms to prevent cheating.", "error");
+      return;
+    }
+
     if (!aiInput.trim()) return;
 
     const API_KEY = import.meta.env.VITE_GROQ_API_KEY; // Use your new Groq key
@@ -816,10 +808,12 @@ export default function RoomMessages({ room, onBack }) {
             peer.on("error", (err) => { console.error("Peer error:", err); delete peersRef.current[data.viewerId]; });
             peersRef.current[data.viewerId] = peer;
             const viewerDocRef = doc(db, "studyRooms", room.id, "signals", data.viewerId);
+            let viewerSignalProcessed = false;
             const viewerUnsub = onSnapshot(viewerDocRef, docSnap => {
               const viewerData = docSnap.data();
-              if (viewerData?.viewerSignal && peer && !peer.destroyed && peer.signalingState !== 'closed') { 
+              if (viewerData?.viewerSignal && !viewerSignalProcessed && peer && !peer.destroyed && peer.signalingState !== 'closed') { 
                 try {
+                  viewerSignalProcessed = true;
                   peer.signal(viewerData.viewerSignal); 
                   viewerUnsub(); 
                 } catch (err) {
@@ -883,12 +877,18 @@ export default function RoomMessages({ room, onBack }) {
     if (isHost || isDummy || !user?.uid || !room?.id) return;
     const viewerId = viewerIdRef.current;
     const signalDocRef = doc(db, "studyRooms", room.id, "signals", viewerId);
+    let hostSignalProcessed = false; // Track if hostSignal has been processed
     const joinRoom = async () => {
       try {
         await setDoc(signalDocRef, { type: "viewer", roomId: room.id, viewerId, userId: user.uid, hostId: room.createdBy, timestamp: Date.now() });
         const unsubscribe = onSnapshot(signalDocRef, docSnap => {
           const data = docSnap.data();
-          if (!data?.hostSignal || peersRef.current[viewerId]) return;
+          if (!data?.hostSignal) return;
+          
+          // Only process hostSignal once to prevent state violations
+          if (hostSignalProcessed) return;
+          hostSignalProcessed = true;
+          
           if (!peersRef.current[viewerId]) {
             // Use centralized ICE servers (prefers env-configured TURN/STUN)
             const iceServers = [
@@ -907,16 +907,10 @@ export default function RoomMessages({ room, onBack }) {
             peer.on("stream", remoteStream => { setRemoteStreams(prev => ({ ...prev, [viewerId]: remoteStream })); });
             peer.on("close", () => { delete peersRef.current[viewerId]; });
             peer.on("error", (err) => { console.error("Viewer peer error:", err); delete peersRef.current[viewerId]; });
+            peersRef.current[viewerId] = peer;
             if (peer && !peer.destroyed && peer.signalingState !== 'closed') {
               try { peer.signal(data.hostSignal); } 
               catch (err) { console.error("Error setting host signal:", err); }
-            }
-            peersRef.current[viewerId] = peer;
-          } else {
-            const existingPeer = peersRef.current[viewerId];
-            if (existingPeer && !existingPeer.destroyed && existingPeer.signalingState !== 'closed') {
-              try { existingPeer.signal(data.hostSignal); } 
-              catch (err) { console.error("Error signaling existing peer:", err); delete peersRef.current[viewerId]; }
             }
           }
         });
@@ -1345,13 +1339,17 @@ export default function RoomMessages({ room, onBack }) {
                     <input 
                       value={aiInput} 
                       onChange={e => setAiInput(e.target.value)} 
-                      placeholder="Ask anything..." 
-                      className="flex-1 px-4 py-2.5 border border-gray-200 rounded-full bg-gray-50 outline-none text-sm focus:border-blue-400 focus:ring-1 focus:ring-blue-200 transition-all"
-                      disabled={isAiLoading}
+                      // UPDATE PLACEHOLDER:
+                      placeholder={isQuizRoom ? "AI disabled during Quiz..." : "Ask anything..."} 
+                      // ADD disabled:bg-gray-100 disabled:cursor-not-allowed TO className:
+                      className="flex-1 px-4 py-2.5 border border-gray-200 rounded-full bg-gray-50 outline-none text-sm focus:border-blue-400 focus:ring-1 focus:ring-blue-200 transition-all disabled:bg-gray-100 disabled:cursor-not-allowed"
+                      // UPDATE DISABLED STATE:
+                      disabled={isAiLoading || isQuizRoom}
                     />
                     <button 
                       type="submit" 
-                      disabled={isAiLoading || !aiInput.trim()}
+                      // UPDATE DISABLED STATE:
+                      disabled={isAiLoading || (!aiInput.trim() && !isQuizRoom) || isQuizRoom}
                       className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-4 py-2.5 rounded-full disabled:opacity-50 disabled:cursor-not-allowed hover:shadow-lg transition-all flex items-center gap-2 text-sm font-bold"
                     >
                       <FaPaperPlane size={12} />

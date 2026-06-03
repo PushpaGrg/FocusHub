@@ -1,3 +1,7 @@
+// Login Page - sign up, log in, reset password
+// Firebase auth with Google OAuth option
+// all the standard auth stuff
+
 import { useState, useEffect } from "react";
 import { auth, provider, db } from "../firebase";
 import {
@@ -15,7 +19,7 @@ import {
   FaShieldAlt, FaKey, FaUserCheck
 } from "react-icons/fa";
 
-// Custom Dialog Components
+// error popup
 const ErrorDialog = ({ message, onClose }) => (
   <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
     <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-md w-full text-center border border-gray-200 animate-slideUp">
@@ -34,6 +38,7 @@ const ErrorDialog = ({ message, onClose }) => (
   </div>
 );
 
+// success popup
 const SuccessDialog = ({ message, onClose }) => (
   <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
     <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-md w-full text-center border border-gray-200 animate-slideUp">
@@ -52,6 +57,7 @@ const SuccessDialog = ({ message, onClose }) => (
   </div>
 );
 
+// password reset form
 const ForgotPasswordDialog = ({ isOpen, onClose, email, onEmailChange, onSendReset, isSending }) => (
   <div className={`fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-sm transition-opacity ${isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
     <div className={`bg-white p-8 rounded-2xl shadow-2xl max-w-md w-full border border-gray-200 transition-all ${isOpen ? 'scale-100 opacity-100' : 'scale-95 opacity-0'}`}>
@@ -99,7 +105,11 @@ const ForgotPasswordDialog = ({ isOpen, onClose, email, onEmailChange, onSendRes
   </div>
 );
 
+// ────────────────────────────────────────────────
+// Login & Sign Up Page
+// ────────────────────────────────────────────────
 export default function Login({ onLogin, onBack }) {
+  // form state
   const [isSignup, setIsSignup] = useState(false);
   const [fullName, setFullName] = useState("");
   const [username, setUsername] = useState("");
@@ -109,6 +119,8 @@ export default function Login({ onLogin, onBack }) {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  
+  // dialogs and feedback
   const [errorDialog, setErrorDialog] = useState(null);
   const [successDialog, setSuccessDialog] = useState(null);
   const [showForgotPassword, setShowForgotPassword] = useState(false);
@@ -116,7 +128,7 @@ export default function Login({ onLogin, onBack }) {
   const [isLoading, setIsLoading] = useState(false);
   const [isSendingReset, setIsSendingReset] = useState(false);
 
-  // Password strength checker
+  // check if password is strong enough
   const checkPasswordStrength = (password) => {
     const feedback = [];
     let score = 0;

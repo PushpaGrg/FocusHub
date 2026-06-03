@@ -1,13 +1,17 @@
-// src/pages/CreateStudyBuddyRoom.jsx
+// Create Study Buddy Room - pair up for P2P study sessions
+// just need a room name and description, that's it
+
 import { useState, useEffect, useCallback } from "react";
 import { FaTimes, FaUserFriends, FaLock } from "react-icons/fa";
 
 export default function CreateStudyBuddyRoom({ onCancel, onSave }) {
+  // form inputs
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [loading, setLoading] = useState(false);
   const [nameError, setNameError] = useState("");
 
+  // close on escape key
   const handleDismiss = useCallback(() => {
     if (!loading) onCancel();
   }, [loading, onCancel]);
@@ -20,6 +24,7 @@ export default function CreateStudyBuddyRoom({ onCancel, onSave }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [handleDismiss]);
 
+  // validate and save
   const handleSubmit = async (e) => {
     e.preventDefault();
 

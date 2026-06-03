@@ -1,4 +1,5 @@
-// src/pages/UserStatistics.jsx
+// User Statistics - see your focus stats, badges, level, all that gamification stuff
+
 import React, { useState, useEffect } from "react";
 import { 
   FaArrowLeft, FaTrophy, FaMedal, FaClock, FaStar, 
@@ -14,18 +15,20 @@ export default function UserStatistics({ user, onBack }) {
   const [animated, setAnimated] = useState(false);
 
   useEffect(() => {
-    // Trigger entrance animations after mount
+    // trigger animations on load
     setAnimated(true);
   }, []);
 
   if (!user) return null;
 
-  // --- 1. PROCESS REAL BACKEND DATA ---
+  // ────────────────────────────────────────────────
+  // Process real data from firebase
+  // ────────────────────────────────────────────────
   const totalScore = user.totalScore || 0;
   const totalMinutes = user.totalFocusTime || 0;
   const badges = user.badges || [];
 
-  // Gamification Logic: Level Up every 500 points
+  // gamification: go up a level every 500 points
   const pointsPerLevel = 500;
   const level = Math.floor(totalScore / pointsPerLevel) + 1;
   const currentLevelScore = totalScore % pointsPerLevel;
@@ -33,19 +36,21 @@ export default function UserStatistics({ user, onBack }) {
   const progressPercent = (currentLevelScore / nextLevelScore) * 100;
   const remainingPoints = nextLevelScore - currentLevelScore;
 
-  // Rank determination
+  // figure out your rank
   const userRank = level < 5 ? "Novice" : level < 10 ? "Apprentice" : "Focus Master";
 
-  // --- 2. PREPARE GRAPH DATA ---
+  // ────────────────────────────────────────────────
+  // Data for charts
+  // ────────────────────────────────────────────────
   
-  // Data for Radial Chart (Level Progress)
+  // radial chart (level progress)
   const levelData = [
     { name: "Progress", value: progressPercent, fill: "#8b5cf6" }, 
     { name: "Remaining", value: 100 - progressPercent, fill: "#f3f4f6" } 
   ];
 
-  // Generate deterministic "Recent History" based on their total minutes
-  // This makes the graph look real and dynamic without needing a complex backend table yet
+  // generate fake weekly data from their total minutes
+  // makes the graph look realistic without needing a complex backend
   const generateWeeklyData = (minutes) => {
     const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     const baseVal = Math.max(10, Math.floor(minutes / 10)); 

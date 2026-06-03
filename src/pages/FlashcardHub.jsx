@@ -1,26 +1,29 @@
-// src/pages/FlashcardHub.jsx
+// Flashcard Hub - create decks and study
+// memorize stuff with spaced repetition, multiple choice options too
+
 import React, { useState, useEffect } from "react";
 import { db } from "../firebase";
 import { collection, addDoc, query, where, onSnapshot, deleteDoc, doc, updateDoc, serverTimestamp } from "firebase/firestore";
 import { FaArrowLeft, FaPlus, FaTrash, FaPlay, FaLayerGroup, FaRedo, FaCheck, FaListUl } from "react-icons/fa";
 
 export default function FlashcardHub({ user, onBack }) {
+  // decks list
   const [decks, setDecks] = useState([]);
   const [activeDeck, setActiveDeck] = useState(null);
   const [isCreatingDeck, setIsCreatingDeck] = useState(false);
   const [newDeckTitle, setNewDeckTitle] = useState("");
   
-  // Study Mode States
+  // study mode
   const [isStudying, setIsStudying] = useState(false);
   const [currentCardIndex, setCurrentCardIndex] = useState(0);
   const [isFlipped, setIsFlipped] = useState(false);
 
-  // New Card States
+  // new card form
   const [newFront, setNewFront] = useState("");
   const [newBack, setNewBack] = useState("");
-  const [newWrongOptions, setNewWrongOptions] = useState(""); // NEW: For Multiple Choice
+  const [newWrongOptions, setNewWrongOptions] = useState(""); // for multiple choice
 
-  // Fetch User's Decks
+  // fetch user's decks
   useEffect(() => {
     if (!user?.uid) return;
     const q = query(collection(db, "flashcard_decks"), where("createdBy", "==", user.uid));
@@ -35,6 +38,7 @@ export default function FlashcardHub({ user, onBack }) {
     return () => unsubscribe();
   }, [user?.uid, activeDeck]);
 
+  // create a new deck
   const handleCreateDeck = async (e) => {
     e.preventDefault();
     if (!newDeckTitle.trim()) return;

@@ -1,8 +1,10 @@
-// src/pages/EditProfile.jsx
+// Edit Your Profile
+// change your bio, study preferences, pfp, whatever
+
 import { useState, useRef } from "react";
 import { FaCamera, FaUser, FaGraduationCap, FaEnvelope, FaTimes, FaSave, FaUpload, FaCheckCircle, FaExclamationTriangle, FaCompress } from "react-icons/fa";
 
-// Custom Error Dialog Component
+// error dialog
 const ErrorDialog = ({ message, onClose }) => (
   <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
     <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-md w-full text-center border border-gray-200 animate-slideUp">
@@ -21,7 +23,7 @@ const ErrorDialog = ({ message, onClose }) => (
   </div>
 );
 
-// Success Dialog Component  
+// success dialog  
 const SuccessDialog = ({ message, onClose }) => (
   <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
     <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-md w-full text-center border border-gray-200 animate-slideUp">

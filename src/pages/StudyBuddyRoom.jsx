@@ -1,22 +1,8 @@
-/**
- * StudyBuddyRoom Component
- * 
- * Real-time peer-to-peer study sessions with video/audio via PeerJS and WebRTC
- * Features:
- * - Instant P2P connections between study partners
- * - Live messaging and resource sharing
- * - Pomodoro timer for focus sessions
- * - Quiz/flashcard integration
- * - Media recording and playback
- * 
- * Architecture:
- * - Uses Firebase Firestore for signaling and state sync
- * - PeerJS for WebRTC peer connections
- * - Automatic reconnection with exponential backoff
- * - Optimized for restrictive networks (classrooms, corporate)
- */
+// Study Buddy Room - P2P video chat with real-time collaboration
+// Uses PeerJS for WebRTC + Firebase for signaling and stuff
+// has timers, quizzes, chat, file sharing, the works
 
-import { useState, useEffect, useRef, memo } from 'react';
+import { useState, useEffect, useRef, memo, useCallback} from 'react';
 import { db, auth } from '../firebase';
 import {
   collection, doc, deleteDoc, getDocs, addDoc, query, orderBy, onSnapshot,
@@ -37,38 +23,30 @@ import { useAuthState } from 'react-firebase-hooks/auth';
 import { containsSpam } from '../utils/spamDetection';
 import { getStudyBuddyPeerOptions } from '../utils/webrtcConfig';
 
-// Audio files for notifications
+// sound for distraction alerts
 const ALERT_SOUND_URL = 'https://actions.google.com/sounds/v1/alarms/mechanical_clock_ring.ogg';
 const alertSound = new Audio(ALERT_SOUND_URL);
 alertSound.loop = true;
 
-// Timer configuration
+// timer stuff
 const DEFAULT_WORK_MINUTES = 25;
 const DEFAULT_BREAK_MINUTES = 5;
 
-// Chat/message constraints
+// message rate limiting - stop spam
 const MESSAGE_COOLDOWN_MS = 2000;
 const MAX_MESSAGE_LENGTH = 300;
 
-// ============================================================================
-// SHARED COMPONENTS - Used throughout StudyBuddyRoom
-// ============================================================================
+// ────────────────────────────────────────────────
+// Shared Components
+// ────────────────────────────────────────────────
 
-/**
- * Toast Notification Component
- * Auto-dismisses after 3 seconds
- * 
- * @param {Object} props
- * @param {string} props.message - Notification text
- * @param {string} props.type - "error" | "success" | "info"
- * @param {Function} props.onClose - Callback when dismissed
- */
 const Toast = ({ message, type, onClose }) => {
   useEffect(() => {
     const timer = setTimeout(onClose, 3000);
     return () => clearTimeout(timer);
   }, [onClose]);
 
+  // pick color based on what kinda toast it is
   const bg = type === 'error' ? 'bg-red-500' : type === 'success' ? 'bg-green-500' : 'bg-blue-500';
   
   return (
@@ -80,16 +58,6 @@ const Toast = ({ message, type, onClose }) => {
   );
 };
 
-/**
- * Confirmation Modal Component
- * Used for destructive actions requiring user confirmation
- * 
- * @param {Object} props
- * @param {string} props.title - Modal heading
- * @param {string} props.message - Confirmation text
- * @param {Function} props.onConfirm - Called when user confirms
- * @param {Function} props.onCancel - Called when user cancels
- */
 const ConfirmModal = ({ title, message, onConfirm, onCancel }) => (
   <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
     <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center border border-gray-200">
@@ -104,10 +72,6 @@ const ConfirmModal = ({ title, message, onConfirm, onCancel }) => (
   </div>
 );
 
-/**
- * Pomodoro Timer Setup Modal
- * Allows users to configure work/break durations
- */
 const TimerSetupModal = ({ onClose, onSave }) => {
   const [workMinutes, setWorkMinutes] = useState(String(DEFAULT_WORK_MINUTES));
   const [breakMinutes, setBreakMinutes] = useState(String(DEFAULT_BREAK_MINUTES));
@@ -153,18 +117,6 @@ const TimerSetupModal = ({ onClose, onSave }) => {
   );
 };
 
-/**
- * Control Button Component
- * Reusable button with hover tooltips and variants
- * 
- * @param {Object} props
- * @param {Function} props.onClick - Click handler
- * @param {ReactNode} props.icon - Icon element
- * @param {string} props.label - Tooltip label
- * @param {string} props.variant - Button style variant
- * @param {boolean} props.disabled - Disabled state
- * @param {boolean} props.active - Active/toggle state
- */
 const ControlButton = ({ onClick, icon, label, variant = 'default', disabled = false, active = false }) => {
   const variants = {
     default: 'bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/10',
@@ -212,10 +164,77 @@ const BreakOverlay = memo(({ isBreak, timeLeft }) => {
   );
 });
 
+// remote video player - shows buddy's camera feed
+// tries to play video when stream arrives, shows loading avatar if not ready yet
+function RemoteVideo({ buddy, stream, isHost, mutedByHost, onHostMuteToggle }) {
+  const videoRef = useRef(null);
+  const [hasVideo, setHasVideo] = useState(false);
 
-const RemoteVideo = memo(function RemoteVideo({ buddy, stream, isHost, mutedByHost, onHostMuteToggle }) {
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !stream) return;
+
+    console.log(`[Video] attaching stream for ${buddy.username}`);
+    
+    // assign the stream to video element
+    video.srcObject = stream;
+
+    // Keep incoming video alive without overriding host microphone controls.
+    stream.getVideoTracks().forEach(t => {
+      t.enabled = true;
+      console.log(`[Video] ${t.kind} track is ${t.readyState}`);
+    });
+
+    // keep trying to play video until frames show up
+    let attempts = 0;
+    const playHammer = setInterval(() => {
+      if (video.videoWidth > 0) {
+        setHasVideo(true);
+        clearInterval(playHammer);
+        console.log(`[Video] ${buddy.username}'s video is rendering`);
+      } else {
+        attempts++;
+        video.play().catch(() => {});
+        // if no video after 10 seconds, try reassigning the stream
+        if (attempts === 20) video.srcObject = stream; 
+      }
+    }, 500);
+
+    return () => {
+      clearInterval(playHammer);
+      if (videoRef.current) videoRef.current.srcObject = null;
+    };
+  }, [stream?.id, buddy.username]);
+
+  useEffect(() => {
+    if (!stream) return;
+    stream.getAudioTracks().forEach(track => {
+      track.enabled = !mutedByHost;
+    });
+  }, [stream, mutedByHost]);
+
   return (
-    <div className="relative bg-gray-900 rounded-2xl overflow-hidden border border-white/10 w-full h-full group">
+    <div className="relative bg-gray-900 rounded-2xl overflow-hidden border border-white/10 w-full h-full min-h-[200px]">
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        className="absolute inset-0 w-full h-full object-cover bg-black"
+        style={{ opacity: hasVideo ? 1 : 0, transition: 'opacity 0.3s' }}
+      />
+
+      {!hasVideo && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900 z-10">
+           <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center text-2xl font-bold text-white mb-2 shadow-lg">
+            {(buddy.username || "S").charAt(0).toUpperCase()}
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-ping"></div>
+            <p className="text-gray-500 text-[10px] uppercase tracking-widest font-bold">Initializing Video...</p>
+          </div>
+        </div>
+      )}
+
       {isHost && onHostMuteToggle && (
         <button
           type="button"
@@ -223,40 +242,28 @@ const RemoteVideo = memo(function RemoteVideo({ buddy, stream, isHost, mutedByHo
             e.stopPropagation();
             onHostMuteToggle(buddy.uid);
           }}
-          className="absolute top-2 right-2 z-10 p-2 rounded-xl bg-black/70 border border-white/20 text-white hover:bg-red-600/90 transition shadow-lg"
-          title={mutedByHost ? "Unmute participant" : "Mute participant"}
+          className={`absolute top-3 right-3 z-30 p-3 rounded-xl border text-sm font-extrabold shadow-xl backdrop-blur-md transition ${
+            mutedByHost
+              ? "bg-green-500/90 border-green-300/40 text-white hover:bg-green-400"
+              : "bg-red-500/90 border-red-300/40 text-white hover:bg-red-400"
+          }`}
+          title={mutedByHost ? `Allow ${buddy.username || "participant"} to unmute` : `Mute ${buddy.username || "participant"}`}
         >
           {mutedByHost ? <FaMicrophoneSlash /> : <FaMicrophone />}
         </button>
       )}
-      <video
-        ref={(node) => {
-          if (node && stream && node.srcObject !== stream) {
-            node.srcObject = stream;
-            node.onloadedmetadata = () => node.play().catch(() => {});
-          }
-        }}
-        autoPlay playsInline
-        className={`w-full h-full object-cover ${!stream ? "hidden" : "block"}`}
-      />
-      {!stream && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-900">
-          <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center text-2xl font-bold mb-2 text-white">
-            {(buddy.username || "S").charAt(0).toUpperCase()}
-          </div>
-          <p className="text-gray-500 text-[10px] font-bold uppercase tracking-widest">Connecting...</p>
-        </div>
-      )}
-      <div className="absolute bottom-3 left-3 bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-lg text-xs font-bold border border-white/10 text-white truncate max-w-[80%] flex items-center gap-1.5">
-        {mutedByHost && <FaMicrophoneSlash className="text-red-400 shrink-0" />}
-        {buddy.username}
+
+      <div className="absolute bottom-3 left-3 z-20 bg-black/60 backdrop-blur-md px-3 py-1 rounded-lg text-xs font-bold border border-white/10 text-white flex items-center gap-2 max-w-[calc(100%-1.5rem)]">
+        {mutedByHost ? <FaMicrophoneSlash className="text-red-400 shrink-0" /> : <FaMicrophone className="text-green-400 shrink-0" />}
+        <span>{buddy.username}</span>
+        {mutedByHost && <span className="text-red-300 uppercase tracking-wide">Muted</span>}
       </div>
     </div>
   );
-});
+}
 
 // small tile for the filmstrip at the bottom when presenting
-const FilmstripTile = memo(function FilmstripTile({ label, stream, videoRef, muted = false, camOn = true, initial }) {
+const FilmstripTile = memo(function FilmstripTile({ label, stream, videoRef, muted = false, mutedByHost = false, camOn = true, initial }) {
   return (
     <div className="relative bg-gray-900 rounded-xl overflow-hidden border border-white/15 shrink-0" style={{ width: 180, height: 112 }}>
       <video
@@ -266,8 +273,9 @@ const FilmstripTile = memo(function FilmstripTile({ label, stream, videoRef, mut
             node.onloadedmetadata = () => node.play().catch(() => {});
           }
         })}
-        autoPlay playsInline muted={muted}
-        className={`w-full h-full object-cover ${(!camOn || !stream) ? "hidden" : "block"}`}
+        autoPlay playsInline muted={muted || mutedByHost}
+        className="w-full h-full object-cover"
+        style={{ opacity: (camOn && stream) ? 1 : 0 }}
       />
       {(!camOn || !stream) && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
@@ -277,7 +285,8 @@ const FilmstripTile = memo(function FilmstripTile({ label, stream, videoRef, mut
         </div>
       )}
       {label && (
-        <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded text-[10px] font-bold text-white border border-white/10 truncate max-w-[90%]">
+        <div className="absolute bottom-2 left-2 bg-black/60 backdrop-blur-md px-2 py-0.5 rounded text-[10px] font-bold text-white border border-white/10 truncate max-w-[90%] flex items-center gap-1">
+          {mutedByHost && <FaMicrophoneSlash className="text-red-300 shrink-0" />}
           {label}
         </div>
       )}
@@ -285,35 +294,35 @@ const FilmstripTile = memo(function FilmstripTile({ label, stream, videoRef, mut
   );
 });
 
-// video grid for the normal (non-presenting) state
+// shows everyone's videos in a grid layout
+// the KEY part is important - don't use stream in it or videos will flicker
 function VideoGrid({ myVideoRef, camOn, safeUsername, buddies, remoteStreams, user, isHost, hostMutedMicUids, onHostMuteToggle }) {
   const hostMutedMe = !!hostMutedMicUids?.[user?.uid];
-  const totalCount = 1 + Object.keys(remoteStreams).length;
+  const totalCount = 1 + buddies.filter(b => b.uid !== user.uid).length;
   const cols = totalCount === 1 ? 1 : totalCount <= 4 ? 2 : 3;
 
+  const localVideoAssign = useCallback((node) => {
+    myVideoRef.current = node;
+    if (!node) return;
+    const stream = window.__localStream;
+    if (stream && node.srcObject !== stream) {
+      node.srcObject = stream;
+      const tryPlay = () => node.play().catch(() => {});
+      if (node.readyState >= 1) tryPlay();
+      else node.addEventListener('loadedmetadata', tryPlay, { once: true });
+    }
+  }, []);
+
   return (
-    <div
-      className="w-full h-full p-5"
-      style={{
-        display: "grid",
-        gridTemplateColumns: `repeat(${cols}, 1fr)`,
-        gridAutoRows: "1fr",
-        gap: 12,
-        alignContent: "center",
-        justifyContent: "center",
-      }}
-    >
-      <div className="relative bg-gray-900 rounded-2xl overflow-hidden border border-white/10 group" style={{ minHeight: 0 }}>
+    <div className="w-full h-full p-5" style={{ display: "grid", gridTemplateColumns: `repeat(${cols}, 1fr)`, gridAutoRows: "1fr", gap: 12, alignContent: "center", justifyContent: "center" }}>
+      <div className="relative bg-gray-900 rounded-2xl overflow-hidden border border-white/10" style={{ minHeight: 0 }}>
         <video
-          ref={(node) => {
-            myVideoRef.current = node;
-          }}
+          ref={localVideoAssign}
           autoPlay playsInline muted
-          className={`w-full h-full object-cover ${!camOn ? "hidden" : "block"}`}
-          style={{ display: camOn ? "block" : "none" }}
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', opacity: camOn ? 1 : 0, transition: 'opacity 0.3s' }}
         />
         {!camOn && (
-          <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
+          <div className="absolute inset-0 flex items-center justify-center bg-gray-900" style={{ pointerEvents: 'none' }}>
             <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center text-2xl font-bold text-white shadow-lg">
               {(safeUsername || "S").charAt(0).toUpperCase()}
             </div>
@@ -326,23 +335,22 @@ function VideoGrid({ myVideoRef, camOn, safeUsername, buddies, remoteStreams, us
         </div>
       </div>
 
+      {/* KEY is uid only — never change it on stream arrival, that causes remount + srcObject wipe */}
       {buddies.filter(b => b.uid !== user.uid).map((buddy) => (
-        <RemoteVideo
-          key={buddy.uid}
-          buddy={buddy}
-          stream={remoteStreams[buddy.uid]}
-          isHost={isHost}
-          mutedByHost={!!hostMutedMicUids?.[buddy.uid]}
-          onHostMuteToggle={onHostMuteToggle}
-        />
+        <div key={buddy.uid} style={{ minHeight: 200, minWidth: 200, position: 'relative' }}>
+          <RemoteVideo
+            buddy={buddy}
+            stream={remoteStreams[buddy.uid] || null}
+            isHost={isHost}
+            mutedByHost={!!hostMutedMicUids?.[buddy.uid]}
+            onHostMuteToggle={onHostMuteToggle}
+          />
+        </div>
       ))}
     </div>
   );
 }
 
-// ── This is the bottom hover zone that shows when presenting (resource or quiz)
-// When you hover near the bottom, the filmstrip slides up AND the dock appears
-// When you move away, both hide again
 function PresentingBottomZone({
   safeUsername, myVideoRef, camOn, micOn, buddies, remoteStreams, user, isHost, activeQuiz, timerData, setShowTimerModal,
   toggleMic, toggleCamera, toggleSidePanel, showTasks, showFiles, showChat, setShowQuizPicker, onHoverChange,
@@ -350,14 +358,12 @@ function PresentingBottomZone({
 }) {
   const hostMutedMe = !!hostMutedMicUids?.[user?.uid];
   return (
-    // the whole bottom area is one hover group — 168px tall
     <div
       className="absolute bottom-0 left-0 w-full z-[55] group/bottom"
       style={{ height: 168 }}
       onMouseEnter={() => onHoverChange && onHoverChange(true)}
       onMouseLeave={() => onHoverChange && onHoverChange(false)}
     >
-      {/* filmstrip row — hidden by default, slides up on hover */}
       <div
         className="absolute left-0 w-full flex items-center gap-3 px-5 py-3 overflow-x-auto
                    translate-y-full group-hover/bottom:translate-y-0
@@ -370,7 +376,6 @@ function PresentingBottomZone({
           borderTop: "1px solid rgba(255,255,255,0.08)",
         }}
       >
-        {/* my own tile */}
         <FilmstripTile
           label={`${safeUsername} (You)`}
           videoRef={myVideoRef}
@@ -378,7 +383,6 @@ function PresentingBottomZone({
           camOn={camOn}
           initial={(safeUsername || "S").charAt(0)}
         />
-        {/* everyone else */}
         {buddies.filter(b => b.uid !== user.uid).map((buddy) => (
           <div key={buddy.uid} className="relative shrink-0">
             {isHost && onHostMuteToggle && (
@@ -388,8 +392,12 @@ function PresentingBottomZone({
                   e.stopPropagation();
                   onHostMuteToggle(buddy.uid);
                 }}
-                className="absolute top-1 right-1 z-10 p-1.5 rounded-lg bg-black/80 border border-white/20 text-white text-xs hover:bg-red-600/90"
-                title={hostMutedMicUids?.[buddy.uid] ? "Unmute" : "Mute"}
+                className={`absolute top-1 right-1 z-10 p-1.5 rounded-lg border text-xs font-extrabold shadow-lg transition ${
+                  hostMutedMicUids?.[buddy.uid]
+                    ? "bg-green-500/90 border-green-300/40 text-white hover:bg-green-400"
+                    : "bg-red-500/90 border-red-300/40 text-white hover:bg-red-400"
+                }`}
+                title={hostMutedMicUids?.[buddy.uid] ? "Allow mic" : "Mute mic"}
               >
                 {hostMutedMicUids?.[buddy.uid] ? <FaMicrophoneSlash /> : <FaMicrophone />}
               </button>
@@ -397,6 +405,7 @@ function PresentingBottomZone({
             <FilmstripTile
               label={buddy.username}
               stream={remoteStreams[buddy.uid]}
+              mutedByHost={!!hostMutedMicUids?.[buddy.uid]}
               camOn={true}
               initial={(buddy.username || "S").charAt(0)}
             />
@@ -404,7 +413,6 @@ function PresentingBottomZone({
         ))}
       </div>
 
-      {/* control dock — hidden by default, fades in on hover */}
       <div
         className="absolute bottom-4 left-1/2 -translate-x-1/2
                    opacity-0 group-hover/bottom:opacity-100
@@ -446,42 +454,32 @@ function PresentingBottomZone({
   );
 }
 
-/**
- * Main StudyBuddy Room Component
- * 
- * Manages: peer connections, messaging, resources, quizzes, timer
- * Auth: Only room creator (host) or invited participants can join
- */
+// ────────────────────────────────────────────────
+// Main StudyBuddy Room Component
+// handles all the P2P video, messaging, timers, etc
+// ────────────────────────────────────────────────
 export default function StudyBuddyRoom({ room, onBack }) {
   const [user] = useAuthState(auth);
 
-  // ─────────────────────────────────────────────────────────────────
-  // UI State - User interface interactions
-  // ─────────────────────────────────────────────────────────────────
+  // user profile stuff
   const [userProfile, setUserProfile] = useState(null);
   const [toast, setToast] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [copied, setCopied] = useState(false);
   const [isBottomHovered, setIsBottomHovered] = useState(false);
 
-  // ─────────────────────────────────────────────────────────────────
-  // Session State - Active session status
-  // ─────────────────────────────────────────────────────────────────
+  // connection status
   const [sessionStarted, setSessionStarted] = useState(false);
   const [peerReady, setPeerReady] = useState(false);
   const [peerError, setPeerError] = useState(null);
 
-  // ─────────────────────────────────────────────────────────────────
-  // Media State - Camera, microphone, remote streams
-  // ─────────────────────────────────────────────────────────────────
+  // local media
   const [camOn, setCamOn] = useState(true);
   const [micOn, setMicOn] = useState(true);
   const [remoteStreams, setRemoteStreams] = useState({});
   const [hostMutedMicUids, setHostMutedMicUids] = useState({});
 
-  // ─────────────────────────────────────────────────────────────────
-  // Room State - Participant and resource data
-  // ─────────────────────────────────────────────────────────────────
+  // people in this room
   const [buddies, setBuddies] = useState([]);
   const [messages, setMessages] = useState([]);
   const [newMsg, setNewMsg] = useState('');
@@ -490,11 +488,10 @@ export default function StudyBuddyRoom({ room, onBack }) {
   const [isUploading, setIsUploading] = useState(false);
   const [activeResource, setActiveResource] = useState(null);
 
-  // ─────────────────────────────────────────────────────────────────
-  // Timer State - Pomodoro functionality
-  // ─────────────────────────────────────────────────────────────────
+  
+  // pomodoro timer config
   const [timerData, setTimerData] = useState({
-    timeLeft: 1500, // 25 minutes in seconds
+    timeLeft: 1500,
     isRunning: false,
     mode: 'work',
     config: { work: DEFAULT_WORK_MINUTES, break: DEFAULT_BREAK_MINUTES },
@@ -502,78 +499,69 @@ export default function StudyBuddyRoom({ room, onBack }) {
   });
   const [showTimerModal, setShowTimerModal] = useState(false);
 
-  // ─────────────────────────────────────────────────────────────────
-  // Quiz State - Live quiz/flashcard functionality
-  // ─────────────────────────────────────────────────────────────────
+  // quizzes and flashcards
   const [showQuizPicker, setShowQuizPicker] = useState(false);
   const [hostDecks, setHostDecks] = useState([]);
   const [activeQuiz, setActiveQuiz] = useState(null);
   const [quizDeckData, setQuizDeckData] = useState(null);
   const [selectedOption, setSelectedOption] = useState(null);
 
-  // ─────────────────────────────────────────────────────────────────
-  // Task Management State
-  // ─────────────────────────────────────────────────────────────────
+  // tasks/goals list
   const [tasks, setTasks] = useState([]);
   const [newTaskText, setNewTaskText] = useState('');
 
-  // ─────────────────────────────────────────────────────────────────
-  // Panel Visibility State - Sidebar panels
-  // ─────────────────────────────────────────────────────────────────
+  // sidebar panels
   const [showChat, setShowChat] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
   const [showTasks, setShowTasks] = useState(false);
 
-  // ─────────────────────────────────────────────────────────────────
-  // AI Assistant State
-  // ─────────────────────────────────────────────────────────────────
+  // AI helper chat
   const [aiMessages, setAiMessages] = useState([
-    { role: 'assistant', content: 'Hi! Ask me anything about study planning, focus tips, or this room.' }
+    { role: 'assistant', content: 'Hi! Ask me anything...' }
   ]);
   const [aiInput, setAiInput] = useState('');
   const [isAiLoading, setIsAiLoading] = useState(false);
 
-  // ─────────────────────────────────────────────────────────────────
-  // Distraction Tracking State
-  // ─────────────────────────────────────────────────────────────────
+  // distraction detection alerts
   const [distractionCount, setDistractionCount] = useState(0);
   const [showDistractionAlert, setShowDistractionAlert] = useState(false);
 
-  // ─────────────────────────────────────────────────────────────────
-  // Refs - Non-component storage (WebRTC, timers, etc.)
-  // ─────────────────────────────────────────────────────────────────
+  // ────────────────────────────────────────────────
+  // Refs for WebRTC and DOM stuff
+  // ────────────────────────────────────────────────
   const myVideoRef = useRef(null);
-  const peerRef = useRef(null); // Main PeerJS instance
-  const peersRef = useRef({}); // Map of peer calls
-  const localStreamRef = useRef(null); // Local media stream
+  const peerRef = useRef(null);
+  const peersRef = useRef({});
+  const localStreamRef = useRef(null);
+  const hostMutedMicUidsRef = useRef({});
   const chatEndRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  // Session tracking
+  // tracking quiz points and session timing
   const earnedQuizPoints = useRef(0);
   const lastScoredIndex = useRef(-1);
   const sessionStartTime = useRef(Date.now());
   const uploadsCount = useRef(0);
 
-  // ─────────────────────────────────────────────────────────────────
-  // Derived Values
-  // ─────────────────────────────────────────────────────────────────
+
   if (!user || !room) {
     return <div className="h-screen flex items-center justify-center text-white bg-gray-900">Loading...</div>;
   }
 
+  // figure out if i'm running this room
   const isHost = room?.createdBy === user?.uid;
   const roomRef = doc(db, 'studyRooms', room.id);
   const inviteLink = `${window.location.origin}/join/${room.id}`;
+  // make a safe name to display (no null pointers!)
   const safeUsername = userProfile?.username || user?.displayName || (user?.email ? user.email.split('@')[0] : 'Student');
+  hostMutedMicUidsRef.current = hostMutedMicUids || {};
 
-  // ─────────────────────────────────────────────────────────────────
-  // Helper Functions - Toast and dialog triggers
-  // ─────────────────────────────────────────────────────────────────
+  // quick way to trigger a toast notification
   const triggerToast = (msg, type = 'info') => {
     setToast({ message: msg, type });
   };
 
+  // confirm dialog for destructive actions
   const triggerConfirm = (title, message, action) => {
     setConfirmDialog({
       title,
@@ -586,6 +574,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
     });
   };
 
+  // fetch user profile on load
   useEffect(() => {
     if (user?.uid) {
       getDoc(doc(db, "users", user.uid)).then(docSnap => {
@@ -594,7 +583,6 @@ export default function StudyBuddyRoom({ room, onBack }) {
     }
   }, [user.uid]);
 
-  // realtime listeners for room data
   useEffect(() => {
     if (!room?.id) return;
 
@@ -633,19 +621,15 @@ export default function StudyBuddyRoom({ room, onBack }) {
     if (chatEndRef.current) chatEndRef.current.scrollIntoView({ behavior: "smooth" });
   }, [messages, showChat]);
 
-  // join room on mount, leave on unmount
   useEffect(() => {
     const userData = { uid: user.uid, username: safeUsername, email: user.email, joinedAt: new Date() };
     const join = async () => { 
       try {
-        // Check if user already exists in room
         const roomSnap = await getDoc(roomRef);
         if (roomSnap.exists()) {
           const participants = roomSnap.data().participants || [];
           const existingUser = participants.find(p => p.uid === user.uid);
-          
           if (existingUser) {
-            // User already logged in, show error and go back
             triggerToast("You are already logged into this room from another device/tab", "error");
             setTimeout(onBack, 2000);
             return;
@@ -668,9 +652,6 @@ export default function StudyBuddyRoom({ room, onBack }) {
     };
   }, [room.id, user.uid, user.email, safeUsername]);
 
-  // ── TIMER LOGIC
-  // work finishes → start break
-  // break finishes → stop completely (one full round, no loop)
   useEffect(() => {
     let interval = null;
 
@@ -684,7 +665,6 @@ export default function StudyBuddyRoom({ room, onBack }) {
       const breakMin = timerData.config?.break || 5;
 
       if (timerData.mode === "work") {
-        // work just ended, kick off the break
         updateDoc(roomRef, {
           timer: {
             ...timerData,
@@ -696,7 +676,6 @@ export default function StudyBuddyRoom({ room, onBack }) {
           }
         });
       } else {
-        // break just ended — reset to work mode and stop completely (one full round, no loop)
         updateDoc(roomRef, {
           timer: {
             ...timerData,
@@ -712,7 +691,6 @@ export default function StudyBuddyRoom({ room, onBack }) {
     return () => clearInterval(interval);
   }, [isHost, timerData?.isRunning, timerData?.timeLeft, timerData?.mode, timerData?.config, roomRef]);
 
-  // distraction tracker — only fires during work mode
   useEffect(() => {
     if (!sessionStarted || timerData?.mode !== 'work') {
       alertSound.pause();
@@ -739,7 +717,9 @@ export default function StudyBuddyRoom({ room, onBack }) {
     };
   }, [timerData?.mode, sessionStarted]);
 
-  // webcam + peerjs setup once session starts
+  // ────────────────────────────────────────────────
+  // Start camera and PeerJS connection when session begins
+  // ────────────────────────────────────────────────
   useEffect(() => {
     if (!sessionStarted) return;
 
@@ -749,27 +729,58 @@ export default function StudyBuddyRoom({ room, onBack }) {
     const baseReconnectDelay = 1000;
 
     const initMedia = async () => {
+      console.log("[StudyBuddy] initMedia called - starting media acquisition");
       try {
+        // request camera and microphone from user
         const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        
+        // make sure video is enabled and not power-saving
+        stream.getVideoTracks().forEach(track => {
+          track.enabled = true;
+          if (track.contentHint !== undefined) {
+            track.contentHint = 'motion';
+          }
+        });
+        const hostMutedMeOnJoin = !!hostMutedMicUidsRef.current?.[user.uid];
+        stream.getAudioTracks().forEach(track => {
+          track.enabled = !hostMutedMeOnJoin;
+        });
+        console.log("[StudyBuddy] Got stream from getUserMedia, tracks:", { 
+          video: stream.getVideoTracks().length, 
+          audio: stream.getAudioTracks().length 
+        });
+        
+        // save the stream so we can reuse it
         localStreamRef.current = stream;
         window.__localStream = stream;
 
-        if (myVideoRef.current) myVideoRef.current.srcObject = stream;
+        if (myVideoRef.current) {
+          myVideoRef.current.srcObject = stream;
+          console.log("[StudyBuddy] Set myVideoRef.srcObject");
+        }
         setCamOn(stream.getVideoTracks()[0]?.enabled ?? true);
         setMicOn(stream.getAudioTracks()[0]?.enabled ?? true);
 
         sessionStartTime.current = Date.now();
 
+        console.log("[StudyBuddy] Creating PeerJS instance with options...");
         const peer = new Peer(getStudyBuddyPeerOptions());
         peerRef.current = peer;
         reconnectAttempts = 0;
+        console.log("[StudyBuddy] PeerJS instance created, waiting for 'open' event...");
 
         peer.on("open", async (id) => {
+          console.log("[StudyBuddy] PeerJS 'open' event fired with ID:", id);
           setPeerReady(true);
           setPeerError(null);
           reconnectAttempts = 0;
-          console.log("[StudyBuddy] PeerJS connected with ID:", id);
-          await setDoc(doc(db, "studyRooms", room.id, "peers", user.uid), { peerId: id, userId: user.uid, timestamp: Date.now() });
+          console.log("[StudyBuddy] PeerJS connected with ID:", id, "Saving to firestore...");
+          try {
+            await setDoc(doc(db, "studyRooms", room.id, "peers", user.uid), { peerId: id, userId: user.uid, timestamp: Date.now() });
+            console.log("[StudyBuddy] Successfully saved peer info to firestore");
+          } catch (err) {
+            console.error("[StudyBuddy] Failed to save peer info to firestore:", err);
+          }
         });
 
         peer.on("error", (err) => {
@@ -806,30 +817,37 @@ export default function StudyBuddyRoom({ room, onBack }) {
           setPeerReady(false);
         });
 
+        // ── FIXED incoming call handler ──
         peer.on("call", (call) => {
           const callerId = call.metadata?.userId || call.peer;
-          if (!remoteStreams[callerId]) {
-            console.log("[StudyBuddy] Incoming call from:", callerId);
-            call.answer(localStreamRef.current);
-            call.on("stream", (remoteStream) => {
-              console.log("[StudyBuddy] Remote stream received from:", callerId);
-              setRemoteStreams(prev => ({ ...prev, [callerId]: remoteStream }));
-            });
-            call.on("error", (error) => {
-              console.error("[StudyBuddy] Incoming call error:", error);
-              triggerToast("Peer stream failed. Reconnecting...", "error");
-            });
-            call.on("close", () => {
-              console.log("[StudyBuddy] Remote stream closed from:", callerId);
-              setRemoteStreams(prev => {
-                const newStreams = { ...prev };
-                delete newStreams[callerId];
-                return newStreams;
-              });
-            });
-          } else {
-            call.close();
+          console.log("[StudyBuddy] Incoming call from:", callerId);
+
+          if (!localStreamRef.current) {
+            console.error("[StudyBuddy] Local stream missing during incoming call");
+            return;
           }
+
+          // Answer the call with our local stream
+          call.answer(localStreamRef.current);
+          
+          // Track the call object
+          peersRef.current[callerId] = call;
+
+          call.on("stream", (remoteStream) => {
+            console.log("[StudyBuddy] Received remote stream for:", callerId);
+            // Explicitly enable tracks on the incoming stream
+            remoteStream.getTracks().forEach(t => t.enabled = true);
+            
+            setRemoteStreams(prev => ({ 
+              ...prev, 
+              [callerId]: remoteStream 
+            }));
+          });
+
+          call.on("error", (err) => {
+            console.error("[StudyBuddy] Call error:", err);
+            delete peersRef.current[callerId];
+          });
         });
 
       } catch (err) {
@@ -849,74 +867,85 @@ export default function StudyBuddyRoom({ room, onBack }) {
     };
   }, [sessionStarted, room.id, user.uid]);
 
-  // keep myVideoRef in sync with local stream
   useEffect(() => {
     if (myVideoRef.current && localStreamRef.current) {
       if (myVideoRef.current.srcObject !== localStreamRef.current) {
+        console.log("[StudyBuddy] Syncing local stream to video ref");
         myVideoRef.current.srcObject = localStreamRef.current;
       }
     }
-  });
+  }, []);
 
-  // listen for other peers joining and call them
+  useEffect(() => {
+    const node = myVideoRef.current;
+    const stream = localStreamRef.current;
+    if (node && stream && node.srcObject !== stream) {
+      node.srcObject = stream;
+      const tryPlay = () => node.play().catch(() => {});
+      if (node.readyState >= 1) tryPlay();
+      else node.addEventListener('loadedmetadata', tryPlay, { once: true });
+    }
+  }, [sessionStarted, camOn]);
+
+  // ────────────────────────────────────────────────
+  // Listen for study buddies and connect to them via P2P
+  // ────────────────────────────────────────────────
   useEffect(() => {
     if (!sessionStarted || !peerReady) return;
-    const activeCalls = new Set();
-    let reconnectTimers = {};
+    console.log("[StudyBuddy] Setting up peer listener. sessionStarted:", sessionStarted, "peerReady:", peerReady, "localStream available:", !!localStreamRef.current);
 
-    const unsubscribe = onSnapshot(collection(db, "studyRooms", room.id, "peers"), (snapshot) => {
-      snapshot.docChanges().forEach(async (change) => {
-        if (change.type === "added" || change.type === "modified") {
-          const data = change.doc.data();
-          if (data.userId !== user.uid && !activeCalls.has(data.userId)) {
-            const myDoc = await getDoc(doc(db, "studyRooms", room.id, "peers", user.uid));
-            if (myDoc.exists() && myDoc.data().timestamp < data.timestamp) {
-              activeCalls.add(data.userId);
-              setTimeout(() => {
-                if (peerRef.current && localStreamRef.current) {
-                  if (peerRef.current.disconnected && peerRef.current.reconnect) {
-                    try { peerRef.current.reconnect(); } catch (reconnectError) { console.error("[StudyBuddy] Peer reconnect failed:", reconnectError); }
-                  }
-                  try {
-                    console.log("[StudyBuddy] Initiating call to:", data.userId);
-                    const call = peerRef.current.call(data.peerId, localStreamRef.current, { metadata: { userId: user.uid } });
-                    call.on("stream", (remoteStream) => { 
-                      console.log("[StudyBuddy] Remote stream established with:", data.userId);
-                      setRemoteStreams(prev => ({ ...prev, [data.userId]: remoteStream })); 
-                    });
-                    call.on("error", (error) => {
-                      console.error("[StudyBuddy] Outgoing call error:", error);
-                      triggerToast("Peer stream failed. Retrying...", "error");
-                      activeCalls.delete(data.userId);
-                    });
-                    call.on("close", () => {
-                      console.log("[StudyBuddy] Call closed with:", data.userId);
-                      setRemoteStreams(prev => {
-                        const newStreams = { ...prev };
-                        delete newStreams[data.userId];
-                        return newStreams;
-                      });
-                    });
-                    peersRef.current[data.userId] = call;
-                  } catch (err) {
-                    console.error("[StudyBuddy] Failed to establish call:", err);
-                    activeCalls.delete(data.userId);
-                  }
-                }
-              }, 1500);
-            }
-          }
-        }
+    const callPeer = (targetUserId, targetPeerId) => {
+      if (!peerRef.current || !localStreamRef.current) return;
+
+      // close old call first if it exists
+      if (peersRef.current[targetUserId]) {
+        peersRef.current[targetUserId].close();
+      }
+
+      console.log("[StudyBuddy] Dialing:", targetUserId);
+      const call = peerRef.current.call(targetPeerId, localStreamRef.current, {
+        metadata: { userId: user.uid }
       });
-    }, (error) => console.error("[StudyBuddy] Peer Sync Error:", error));
+
+      peersRef.current[targetUserId] = call;
+
+      call.on("stream", (remoteStream) => {
+        remoteStream.getTracks().forEach(t => t.enabled = true);
+        setRemoteStreams(prev => ({ ...prev, [targetUserId]: remoteStream }));
+      });
+    };
+
+    // watch for peers joining from firestore
+    const unsubscribe = onSnapshot(
+      collection(db, "studyRooms", room.id, "peers"),
+      (snapshot) => {
+        snapshot.docs.forEach((doc) => {
+          const peerData = doc.data();
+          if (peerData.userId === user.uid) return; // don't call yourself lol
+
+          // only ONE person should make the call (the one with the smaller ID alphabetically)
+          // the other just waits to receive - prevents duplicate calls
+          const iAmCaller = user.uid < peerData.userId;
+
+          if (iAmCaller && !peersRef.current[peerData.userId]) {
+            console.log("[StudyBuddy] I am the designated caller for:", peerData.userId);
+            callPeer(peerData.userId, peerData.peerId);
+          }
+        });
+      }
+    );
 
     return () => {
+      console.log("[StudyBuddy] Cleaning up peer listener");
       unsubscribe();
-      Object.values(reconnectTimers).forEach(timer => clearTimeout(timer));
     };
   }, [sessionStarted, peerReady, room.id, user.uid]);
 
-  // --- HANDLERS ---
+  // ────────────────────────────────────────────────
+  // Event Handlers
+  // ────────────────────────────────────────────────
+  
+  // toggle camera on/off
   const toggleCamera = () => {
     if (localStreamRef.current) {
       const track = localStreamRef.current.getVideoTracks()[0];
@@ -924,6 +953,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
     }
   };
 
+  // host can mute/unmute people's mics
   const hostMuteToggle = async (targetUid) => {
     if (!isHost || !targetUid || targetUid === user.uid) return;
     try {
@@ -938,6 +968,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
     }
   };
 
+  // listen if host muted ME
   useEffect(() => {
     if (!localStreamRef.current || !sessionStarted) return;
     const track = localStreamRef.current.getAudioTracks()[0];
@@ -948,6 +979,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
     }
   }, [hostMutedMicUids, user.uid, sessionStarted]);
 
+  // toggle mic on/off (but host can block this)
   const toggleMic = () => {
     if (hostMutedMicUids?.[user.uid]) {
       triggerToast("The host has muted your microphone", "error");
@@ -1004,7 +1036,6 @@ export default function StudyBuddyRoom({ room, onBack }) {
     setShowTimerModal(false);
   };
 
-  // chat
   const handleSend = async (e) => {
     e.preventDefault();
     if (!newMsg.trim()) return;
@@ -1046,7 +1077,6 @@ export default function StudyBuddyRoom({ room, onBack }) {
     } catch (err) {}
   };
 
-  // tasks
   const handleAddTask = async (e) => {
     e.preventDefault();
     if (!newTaskText.trim()) return;
@@ -1061,7 +1091,6 @@ export default function StudyBuddyRoom({ room, onBack }) {
   const completedTasks = tasks.filter(t => t.completed).length;
   const taskProgressPercent = totalTasks === 0 ? 0 : Math.round((completedTasks / totalTasks) * 100);
 
-  // resources
   const handlePresentResource = async (resource) => { if (isHost) await updateDoc(roomRef, { activeResource: resource }); };
   const handleStopPresentation = async () => { if (isHost) await updateDoc(roomRef, { activeResource: null }); };
   const handleApproveResource = async (resourceId) => { if (!isHost) return; try { await updateDoc(doc(db, "room_resources", resourceId), { approved: true }); } catch (err) {} };
@@ -1106,7 +1135,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
     }
 
     try {
-      const response = await fetch("https://api.groq.dev/v1/complete", {
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -1114,14 +1143,12 @@ export default function StudyBuddyRoom({ room, onBack }) {
         },
         body: JSON.stringify({
           model: "llama-3.3-70b-versatile",
-          input: prompt,
-          prompt,
-          max_output_tokens: 400
+          messages: [{ role: "user", content: prompt }]
         })
       });
 
       const data = await response.json();
-      const aiResponse = data?.results?.[0]?.content?.[0]?.text || data?.outputs?.[0]?.content?.[0]?.text || data?.message || data?.text || "Sorry, I couldn't parse the response.";
+      const aiResponse = data.choices[0].message.content;
       setAiMessages(prev => [...prev, { role: "assistant", content: aiResponse }]);
     } catch (err) {
       console.error(err);
@@ -1131,7 +1158,6 @@ export default function StudyBuddyRoom({ room, onBack }) {
     }
   };
 
-  // quiz
   useEffect(() => {
     const fetchDeck = async () => {
       if (activeQuiz?.deckId && (!quizDeckData || quizDeckData.id !== activeQuiz.deckId)) {
@@ -1187,10 +1213,8 @@ export default function StudyBuddyRoom({ room, onBack }) {
   const revealAnswer = async () => { if (!isHost || !activeQuiz) return; try { await updateDoc(roomRef, { "activeQuiz.isRevealed": true }); } catch (err) {} };
 
   const currentQuizCard = quizDeckData?.cards?.[activeQuiz?.currentIndex];
-  // isPresenting is true during quiz OR resource share — both need the hover filmstrip
   const isPresenting = !!(activeQuiz || activeResource);
 
-  // props bundle to pass into PresentingBottomZone so we don't repeat ourselves
   const bottomZoneProps = {
     safeUsername, myVideoRef, camOn, micOn, buddies, remoteStreams, user,
     isHost, activeQuiz, timerData, setShowTimerModal, toggleMic, toggleCamera,
@@ -1233,9 +1257,10 @@ export default function StudyBuddyRoom({ room, onBack }) {
                       <button
                         type="button"
                         onClick={() => hostMuteToggle(b.uid)}
-                        className={`text-xs font-bold px-2.5 py-1 rounded-lg border transition ${hostMutedMicUids?.[b.uid] ? "bg-green-50 text-green-700 border-green-200" : "bg-red-50 text-red-600 border-red-100"}`}
+                        className={`p-2 rounded-lg border transition ${hostMutedMicUids?.[b.uid] ? "bg-green-50 text-green-700 border-green-200" : "bg-red-50 text-red-600 border-red-100"}`}
+                        title={hostMutedMicUids?.[b.uid] ? `Allow ${b.username || "participant"} to unmute` : `Mute ${b.username || "participant"}`}
                       >
-                        {hostMutedMicUids?.[b.uid] ? "Unmute" : "Mute"}
+                        {hostMutedMicUids?.[b.uid] ? <FaMicrophoneSlash /> : <FaMicrophone />}
                       </button>
                     )}
                   </div>
@@ -1267,8 +1292,9 @@ export default function StudyBuddyRoom({ room, onBack }) {
       {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
       {confirmDialog && <ConfirmModal title={confirmDialog.title} message={confirmDialog.message} onConfirm={confirmDialog.onConfirm} onCancel={confirmDialog.onCancel} />}
       {isHost && showTimerModal && <TimerSetupModal onClose={() => setShowTimerModal(false)} onSave={handleSaveTimerConfig} />}
+      
 
-      {/* quiz picker modal */}
+
       {showQuizPicker && isHost && (
         <div className="absolute inset-0 z-[300] bg-black/80 backdrop-blur-md flex items-center justify-center animate-fadeIn">
           <div className="bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl text-gray-900">
@@ -1330,7 +1356,6 @@ export default function StudyBuddyRoom({ room, onBack }) {
           </div>
         )}
 
-        {/* distraction warning */}
         {showDistractionAlert && (
           <div className="absolute top-20 left-1/2 transform -translate-x-1/2 z-[70] animate-bounce">
             <div className="bg-red-500/90 backdrop-blur-md text-white px-6 py-3 rounded-2xl shadow-2xl flex items-center gap-3 border border-red-400">
@@ -1343,7 +1368,6 @@ export default function StudyBuddyRoom({ room, onBack }) {
           </div>
         )}
 
-        {/* break overlay */}
         <BreakOverlay isBreak={timerData?.mode === 'break' && timerData?.isConfigured} timeLeft={timerData?.timeLeft || 0} />
 
         {/* ── QUIZ MODE ── */}
@@ -1382,7 +1406,6 @@ export default function StudyBuddyRoom({ room, onBack }) {
               {!isHost && !activeQuiz.isRevealed && <p className="text-center text-gray-400 text-sm mt-6 animate-pulse">Select an answer...</p>}
             </div>
 
-            {/* host controls — float above the bottom hover zone */}
             {isHost && (
               <div
                 className="absolute flex gap-4 bg-black/60 backdrop-blur-md p-4 rounded-3xl border border-white/10 shadow-2xl z-20 transition-all duration-300"
@@ -1398,18 +1421,15 @@ export default function StudyBuddyRoom({ room, onBack }) {
               </div>
             )}
 
-            {/* hover zone — filmstrip + dock at bottom during quiz */}
             <PresentingBottomZone {...bottomZoneProps} />
           </div>
 
         ) : activeResource ? (
-          // ── RESOURCE SHARE MODE ──
           <div className="w-full h-full flex flex-col bg-gray-900 pt-14">
             <div className="h-11 bg-black/60 backdrop-blur flex items-center justify-between px-5 border-b border-white/10 relative z-30 shrink-0">
               <span className="font-bold text-sm flex items-center gap-2"><FaDesktop className="text-blue-400" style={{ fontSize: 12 }} /> Shared Resource</span>
               {isHost && <button onClick={handleStopPresentation} className="text-xs font-bold bg-red-600 px-4 py-1.5 rounded-lg hover:bg-red-500 transition">Stop</button>}
             </div>
-            {/* padding shrinks to 0 when bar is hidden, grows to 168 when hovered */}
             <div
               className="flex-1 flex items-center justify-center bg-black/40 overflow-hidden transition-all duration-300"
               style={{ paddingBottom: isBottomHovered ? 168 : 0 }}
@@ -1421,12 +1441,10 @@ export default function StudyBuddyRoom({ room, onBack }) {
                   : <iframe src={activeResource.data} className="w-full h-full bg-white rounded-xl" title="resource" />}
             </div>
 
-            {/* hover zone — filmstrip + dock at bottom during resource share */}
             <PresentingBottomZone {...bottomZoneProps} />
           </div>
 
         ) : (
-          // ── NORMAL VIDEO GRID ──
           <div className="absolute inset-0 pt-16 pb-24">
             <VideoGrid
               myVideoRef={myVideoRef}
@@ -1442,7 +1460,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
           </div>
         )}
 
-        {/* ── CONTROL DOCK — only shows in normal (non-presenting) mode ── */}
+        {/* ── CONTROL DOCK ── */}
         {!isPresenting && (
           <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 z-[100] p-2.5 bg-black/70 backdrop-blur-2xl rounded-3xl border border-white/10 flex gap-2 sm:gap-3 shadow-2xl w-max">
             {isHost && (
@@ -1578,7 +1596,7 @@ export default function StudyBuddyRoom({ room, onBack }) {
                   <div className="flex items-center justify-between mb-3">
                     <div>
                       <p className="text-sm font-bold">Study Buddy AI</p>
-                      <p className="text-xs text-gray-500">Ask the assistant about study tips, summaries, or session help.</p>
+                      <p className="text-xs text-gray-500">Your AI Study Companion</p>
                     </div>
                     <span className="text-xs font-semibold text-blue-600">Assistant</span>
                   </div>

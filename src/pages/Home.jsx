@@ -1,16 +1,17 @@
-// src/pages/Home.jsx
+// Home Page - Landing page with hero section and marketing stuff
+// shows features, testimonials, CTA buttons, all that
+
 import React, { useState, useEffect } from "react";
 import { db } from "../firebase";
 import { doc, onSnapshot } from "firebase/firestore";
 import { 
-  FaVideo, FaUsers, FaTools, FaTachometerAlt, FaPhoneAlt, FaEnvelope, 
-  FaArrowRight, FaPlay, FaStar, FaQuoteLeft, FaQuoteRight, FaCheckCircle,
-  FaBrain, FaClock, FaChartLine, FaRocket, FaShieldAlt, FaLightbulb,
-  FaGraduationCap, FaBookOpen, FaLaptopCode, FaMicroscope, FaPalette
+  FaVideo, FaUsers, FaBrain, FaChartLine, FaPhoneAlt, FaEnvelope, 
+  FaArrowRight, FaPlay, FaStar, FaQuoteRight, FaCheckCircle,
+  FaRocket, FaShieldAlt, FaLightbulb, FaBookOpen
 } from "react-icons/fa";
 
-// Fallback data if the Admin hasn't added any slides yet
-const FALLBACK_SLIDE = {
+// fallback if admin hasn't set up slides
+const DEFAULT_SLIDE = {
   id: "default",
   type: "gradient",
   title: "FocusHub",
@@ -18,11 +19,12 @@ const FALLBACK_SLIDE = {
 };
 
 export default function Home({ onGuest, onLoginClick }) {
+  // hero carousel
   const [slides, setSlides] = useState([]);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [isScrolled, setIsScrolled] = useState(false);
 
-  // Navbar scroll effect
+  // navbar scroll effect
   useEffect(() => {
     const handleScroll = () => {
       setIsScrolled(window.scrollY > 50);
@@ -31,7 +33,7 @@ export default function Home({ onGuest, onLoginClick }) {
     return () => window.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // Fetch Dynamic Data from Admin Database
+  // get slides from firebase (or use fallback)
   useEffect(() => {
     const docRef = doc(db, "app_config", "homepage");
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
@@ -41,17 +43,17 @@ export default function Home({ onGuest, onLoginClick }) {
       if (heroSlides.length > 0) {
         setSlides(heroSlides);
       } else {
-        setSlides([FALLBACK_SLIDE]);
+        setSlides([DEFAULT_SLIDE]);
       }
       setCurrentIdx(0);
     }, () => {
-      setSlides([FALLBACK_SLIDE]);
+      setSlides([DEFAULT_SLIDE]);
       setCurrentIdx(0);
     });
     return () => unsubscribe();
   }, []);
 
-  // Auto-slide Logic
+  // auto rotate slides every 6 seconds
   useEffect(() => {
     if (slides.length <= 1) return;
     const timer = setInterval(() => {
@@ -60,15 +62,17 @@ export default function Home({ onGuest, onLoginClick }) {
     return () => clearInterval(timer);
   }, [slides.length]);
 
-  const activeSlide = slides[currentIdx] || FALLBACK_SLIDE;
-  const activeSlideUrl = activeSlide?.url || "";
-  const activeSlideType = activeSlideUrl && ["image", "video"].includes(activeSlide?.type) ? activeSlide.type : "gradient";
-  const heroTitle = activeSlide?.title || FALLBACK_SLIDE.title;
-  const heroSubtitle = activeSlide?.subtitle || FALLBACK_SLIDE.subtitle;
+  const activeSlide = slides[currentIdx] || DEFAULT_SLIDE;
+  const activeSlideUrl  = activeSlide?.url || "";
+  const activeSlideType = activeSlideUrl && ["image", "video"].includes(activeSlide?.type)
+    ? activeSlide.type
+    : "gradient";
+  const heroTitle    = activeSlide?.title    || DEFAULT_SLIDE.title;
+  const heroSubtitle = activeSlide?.subtitle || DEFAULT_SLIDE.subtitle;
 
   return (
     <div className="font-sans relative overflow-x-hidden">
-      {/* Enhanced Navbar with Glassmorphism */}
+      {/* navbar */}
       <nav className={`fixed w-full z-50 transition-all duration-300 ${
         isScrolled 
           ? 'bg-white/90 backdrop-blur-xl shadow-lg border-b border-white/20' 

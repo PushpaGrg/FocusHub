@@ -1,6 +1,10 @@
+// Create a Study Room
+// fill in name, description, pick a category, and boom you're hosting
+
 import { useState } from "react";
 import { FaLaptopCode, FaStethoscope, FaBook, FaHeadphones, FaCoffee } from "react-icons/fa";
 
+// room categories
 const CATEGORIES = [
   { name: "Tech", icon: <FaLaptopCode /> },
   { name: "Medical", icon: <FaStethoscope /> },

@@ -1,4 +1,7 @@
-// src/pages/AdminDashboard.jsx
+// Admin Dashboard - manage the whole platform
+// can edit slides, ban users, check reports, etc
+// only admins can access this
+
 import React, { useState, useEffect } from "react";
 import { db } from "../firebase";
 import { doc, onSnapshot, setDoc, collection, query, deleteDoc, updateDoc } from "firebase/firestore";
@@ -7,6 +10,7 @@ import {
   FaCrown, FaCheckCircle, FaExclamationTriangle, FaBan, FaUnlock, FaInfoCircle, FaTimes, FaFlag 
 } from "react-icons/fa";
 
+// notification toast
 const Toast = ({ message, type, onClose }) => {
   useEffect(() => {
     const timer = setTimeout(onClose, 3000);
@@ -22,6 +26,7 @@ const Toast = ({ message, type, onClose }) => {
   );
 };
 
+// confirm before deleting something
 const ConfirmModal = ({ title, message, onConfirm, onCancel, isDanger = true }) => (
   <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fadeIn">
     <div className="bg-white p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center border border-gray-200">
@@ -40,11 +45,15 @@ const ConfirmModal = ({ title, message, onConfirm, onCancel, isDanger = true }) 
   </div>
 );
 
+// ────────────────────────────────────────────────
+// Admin Dashboard Component
+// ────────────────────────────────────────────────
 export default function AdminDashboard({ user, onBack }) {
   const [activeTab, setActiveTab] = useState("cms"); 
   const [confirmDialog, setConfirmDialog] = useState(null); 
   const [toast, setToast] = useState(null);
 
+  // homepage slides
   const [slides, setSlides] = useState([]);
   const [newSlide, setNewSlide] = useState({ type: "image", url: "", title: "", subtitle: "" });
   const [isSaving, setIsSaving] = useState(false);

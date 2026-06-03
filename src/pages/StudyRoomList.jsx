@@ -1,4 +1,7 @@
-// src/pages/StudyRoomList.jsx
+// Study Room List - browse and join rooms
+// shows all available study sessions you can join
+// has a mix of real rooms + dummy rooms for social proof
+
 import { useEffect, useState } from "react";
 import { db } from "../firebase";
 import { 
@@ -10,14 +13,14 @@ import CreateRoom from "./CreateRoom";
 import { addDoc, collection, onSnapshot, query, orderBy, serverTimestamp } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
-// Dummy avatars for social proof UI
+// random avatar images for fake users (social proof)
 const getDummyAvatars = (seed) => [
   `https://i.pravatar.cc/150?u=${seed}1`,
   `https://i.pravatar.cc/150?u=${seed}2`,
   `https://i.pravatar.cc/150?u=${seed}3`
 ];
 
-// Pre-defined dummy rooms with categories and fake users
+// fake rooms to make it look like there are lots of people studying (marketing)
 const DUMMY_ROOMS = [
   {
     id: "dummy-1",
